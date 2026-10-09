@@ -46,17 +46,17 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.1.0
+go get github.com/pierre10101/go-ai-bridge@v0.1.1
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.0
-bridge-en -version                      # bridge-en 0.1.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.1
+bridge-en -version                      # bridge-en 0.1.1
 ```
 
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.1.0
+require github.com/pierre10101/go-ai-bridge v0.1.1
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -67,9 +67,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.0   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.1   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.0
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.1
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -86,7 +86,7 @@ and the app runs that same runtime: both come from the one module version in
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.0), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.1; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.1), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,

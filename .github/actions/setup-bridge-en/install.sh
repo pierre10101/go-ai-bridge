@@ -5,13 +5,13 @@
 #   BRIDGE_EN_VERSION=0.1.0 ./install.sh            # go install ...@v0.1.0
 #   BRIDGE_EN_METHOD=release ./install.sh           # released binary + SHA256 check
 # The version defaults to the one the app's go.mod requires
-# (`go list -m github.com/pierre10101/bridge-en`), so the binary always matches
+# (`go list -m github.com/pierre10101/go-ai-bridge`), so the binary always matches
 # the runtime the app imports. Installs into $BRIDGE_EN_BIN_DIR (default
 # $HOME/.local/bin) and checks `bridge-en -version`.
 set -euo pipefail
 
-REPO="pierre10101/bridge-en"
-MODULE="github.com/pierre10101/bridge-en"
+REPO="pierre10101/go-ai-bridge"
+MODULE="github.com/pierre10101/go-ai-bridge"
 VERSION="${BRIDGE_EN_VERSION:-}"
 if [ -z "$VERSION" ] && command -v go >/dev/null 2>&1; then
   VERSION=$(go list -m -f '{{.Version}}' "$MODULE" 2>/dev/null || true)

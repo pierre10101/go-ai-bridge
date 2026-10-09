@@ -6,6 +6,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+echo "== no references to the old module name (incl. hidden dirs like .github)"
+old='pierre10101/'"bridge-en"
+if git grep -n -I -e "$old" -- . ':!.git' >/dev/null 2>&1 || grep -rnI --exclude-dir=.git -e "$old" . >/dev/null; then
+  echo "old module path $old found:"; grep -rnI --exclude-dir=.git -e "$old" . || true; exit 1
+fi
+
 echo "== gofmt"
 unformatted=$(gofmt -l .)
 if [ -n "$unformatted" ]; then echo "not gofmt'd:"; echo "$unformatted"; exit 1; fi

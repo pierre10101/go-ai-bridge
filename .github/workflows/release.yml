@@ -2,7 +2,7 @@ name: Release bridge-en
 
 # Cut a release: bump VERSION in a PR, merge it, then on main:
 #   git tag v$(cat VERSION) && git push origin v$(cat VERSION)
-# The tag makes `go install github.com/pierre10101/bridge-en/cmd/bridge-en@v<version>`
+# The tag makes `go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v<version>`
 # work, and this workflow attaches the binaries + SHA256SUMS to a GitHub Release.
 
 on:
@@ -47,4 +47,4 @@ jobs:
           set -euo pipefail
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --title "bridge-en ${GITHUB_REF_NAME}" \
-            --notes "Pin it in an app's go.mod: go get github.com/pierre10101/bridge-en@${GITHUB_REF_NAME}. Install the matching binary: go install github.com/pierre10101/bridge-en/cmd/bridge-en@${GITHUB_REF_NAME}, or in CI uses: pierre10101/bridge-en/.github/actions/setup-bridge-en@${GITHUB_REF_NAME}. See RULEBOOK.md (attached)."
+            --notes "Pin it in an app's go.mod: go get github.com/pierre10101/go-ai-bridge@${GITHUB_REF_NAME}. Install the matching binary: go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@${GITHUB_REF_NAME}, or in CI uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@${GITHUB_REF_NAME}. See RULEBOOK.md (attached)."

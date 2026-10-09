@@ -34,6 +34,13 @@ jobs:
         run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
       - name: scripts/smoke-app.sh (replace to this checkout)
         run: ./scripts/smoke-app.sh
+      - name: setup-bridge-en against the real public module (no replace, hits github.com)
+        run: |
+          set -euo pipefail
+          for m in go-install release; do
+            BRIDGE_EN_VERSION=0.1.0 BRIDGE_EN_METHOD=$m BRIDGE_EN_BIN_DIR="$RUNNER_TEMP/bin-$m" \
+              bash .github/actions/setup-bridge-en/install.sh
+          done
       - name: scripts/smoke-app.sh --go-install (go get + setup-bridge-en install.sh from a tagged mirror)
         run: ./scripts/smoke-app.sh --go-install
 

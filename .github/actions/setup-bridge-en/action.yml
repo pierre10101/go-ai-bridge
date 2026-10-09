@@ -2,11 +2,11 @@ name: Setup bridge-en
 description: >-
   Install a pinned bridge-en (a deterministic Go -> English adapter) and
   put it on PATH. The pin is the app's go.mod: by default the installed
-  binary is the version of github.com/pierre10101/bridge-en the app requires,
+  binary is the version of github.com/pierre10101/go-ai-bridge the app requires,
   the same version as the runtime it imports.
 inputs:
   version:
-    description: "bridge-en version, e.g. 0.1.0 or v0.1.0. Default: the version of github.com/pierre10101/bridge-en required by go.mod in working-directory (go list -m)."
+    description: "bridge-en version, e.g. 0.1.0 or v0.1.0. Default: the version of github.com/pierre10101/go-ai-bridge required by go.mod in working-directory (go list -m)."
     required: false
     default: ""
   working-directory:

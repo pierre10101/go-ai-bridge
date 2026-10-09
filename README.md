@@ -21,9 +21,9 @@ copies no bridge-en source, and this repository ships no app.
 In the app (its `go.mod` is the pin):
 
 ```sh
-go get github.com/pierre10101/go-ai-bridge@v0.1.0
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.0
-bridge-en -version        # bridge-en 0.1.0
+go get github.com/pierre10101/go-ai-bridge@v0.1.1
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.1
+bridge-en -version        # bridge-en 0.1.1
 ```
 
 Install the binary of the version `go.mod` requires: `bridge-en -check` and
@@ -62,9 +62,9 @@ Then write slices under `features/` (see
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.0
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.1
   # with:
-  #   version: v0.1.0            # default: the version go.mod requires (go list -m)
+  #   version: v0.1.1            # default: the version go.mod requires (go list -m)
   #   method: release            # download the released binary, checked with SHA256, instead of go install
   #   working-directory: .       # the app's module root
 - run: bridge-en -check features/*/
