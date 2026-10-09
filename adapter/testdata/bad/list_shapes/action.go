@@ -10,6 +10,7 @@ import (
 	"example.com/fixtures/features/list_shapes/db"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 const Route = "POST /tickets/count"
@@ -48,3 +49,6 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	assert.Post(out.Count >= 0, "a count is never negative")
 	return out, nil
 }
+
+// Roles: anyone may call it (A1); this fixture is about another rule.
+var Roles = httpx.Public

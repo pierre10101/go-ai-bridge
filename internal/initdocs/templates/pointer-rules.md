@@ -8,8 +8,10 @@ app (bridge-en {{VERSION}}). The five rules that matter most:
    `bridge-en -grammar`); there are no waivers.
 3. Never edit a `.en` file by hand: `bridge-en -write`, then read the `.en`
    against intent.md.
-4. Pass the server's time and session in (`clock:"now"`, `server:"session"`);
-   the caller is that session, never an id sent in the request body. A
+4. Pass the server's time, session and signed-in user in (`clock:"now"`,
+   `server:"session"`, `server:"user"`, `server:"role"`); the caller is never
+   an id or role sent in the request body. Every action declares who may
+   call it: `var Roles = httpx.Roles("<role>", ...)` or `httpx.Public`. A
    claim is one conditional UPDATE checked by `!= 1` (or
    `!= int64(len(in.<List>))`).
 5. Change code only through pull requests; never push to main. Install the

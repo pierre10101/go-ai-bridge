@@ -32,3 +32,14 @@ CREATE TABLE IF NOT EXISTS tickets (
     expires_at INTEGER NOT NULL DEFAULT 0,
     sold_to    TEXT    NOT NULL DEFAULT ''
 );
+
+-- One row per event (create_event, my_events). organizer_id: the signed-in
+-- user who created it, and created_as: the role they had then. Both come
+-- from the server (server:"user", server:"role"), never from the request.
+CREATE TABLE IF NOT EXISTS events (
+    id           INTEGER PRIMARY KEY,
+    organizer_id INTEGER NOT NULL CHECK (organizer_id > 0),
+    created_as   TEXT    NOT NULL,
+    title        TEXT    NOT NULL,
+    starts_at    INTEGER NOT NULL
+);

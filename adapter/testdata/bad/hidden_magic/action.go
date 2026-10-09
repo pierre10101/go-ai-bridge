@@ -8,6 +8,7 @@ import (
 
 	"example.com/fixtures/features/hidden_magic/db"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 const Route = "POST /invoices"
@@ -39,3 +40,6 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 }
 
 func vat(cents int64) int64 { return cents * 15 / 100 }
+
+// Roles: anyone may call it (A1); this fixture is about another rule.
+var Roles = httpx.Public

@@ -1060,6 +1060,25 @@ func (w *walker) finish() {
 		}
 		return fmt.Sprintf(docSentences["fields many"], n)
 	}
+	signedOut := map[bool]string{true: h.SignedOutRule}[f.Public] // T3: a Public action may run signed out
+	if f.Public {
+		f.AccessLine = h.PublicRule
+	} else if len(f.Roles) > 0 {
+		names := make([]string, len(f.Roles))
+		for i, r := range f.Roles {
+			names[i] = "`" + r + "`"
+		}
+		f.AccessLine = strings.Replace(h.RolesRule, "{roles}", joinOr(names), 1)
+	}
+	for i := range f.Input {
+		in := &f.Input[i]
+		rule := map[string]string{"user": h.UserRule, "role": h.RoleRule}[in.ServerSet]
+		if rule == "" {
+			continue
+		}
+		out := strings.Replace(signedOut, "{zero}", h.SignedOutZero[in.goType], 1)
+		in.Line = fmt.Sprintf(docSentences["field"], in.JSON, strings.Replace(rule, "{signed out}", out, 1))
+	}
 	for _, in := range f.Input {
 		if in.ServerSet != "" {
 			f.ServerSet = append(f.ServerSet, in)
@@ -1074,7 +1093,9 @@ func (w *walker) finish() {
 		f.ServerIntro = fmt.Sprintf(docSentences["server intro n"], n)
 	}
 	f.InputCount = count(len(f.BodyInput))
-	if f.Method == "GET" {
+	if f.Method == "GET" && len(f.BodyInput) == 0 {
+		f.InputIntro = docSentences["get no input"] // only server-set values (T1-T3)
+	} else if f.Method == "GET" {
 		f.InputIntro = docSentences["get input"]
 		f.InputRule = h.QueryInputRule
 		if f.InputRule == "" {
@@ -1126,6 +1147,9 @@ func (w *walker) finish() {
 		badWhen = fmt.Sprintf(docSentences["server set when"], badWhen, h.ServerSetWhen)
 	}
 	f.Answers = append(f.Answers, line(h.BadInput, badWhen))
+	if !f.Public && len(f.Roles) > 0 { // A3: Bind answers these before it reads the request
+		f.Answers = append(f.Answers, line(h.Unauthenticated, h.Unauthenticated.When), line(h.Forbidden, h.Forbidden.When))
+	}
 	sort.Ints(statuses)
 	for _, code := range statuses {
 		f.Answers = append(f.Answers, fmt.Sprintf(docSentences["failure status"], statusPhrase(code), joinOr(byStatus[code])))

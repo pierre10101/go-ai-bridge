@@ -70,8 +70,8 @@ func TestSessionContract(t *testing.T) {
 func TestSessionRules(t *testing.T) {
 	const field = "Session int64 `json:\"session\" server:\"session\"`"
 	cases := map[string]struct{ from, to, want string }{
-		"other server value": {field, "Session int64 `json:\"session\" server:\"user\"`",
-			"refused: server field Session tagged server:\"user\" is not in the allowed pattern list (T2 session is passed in)"},
+		"other server value": {field, "Session int64 `json:\"session\" server:\"admin\"`",
+			"refused: server field Session tagged server:\"admin\" is not in the allowed pattern list (T2 session is passed in)"},
 		"bool session": {field, "Session bool `json:\"session\" server:\"session\"`",
 			"refused: server field Session of type bool is not in the allowed pattern list (T2 session is passed in)"},
 		"on output": {"SeatID int64 `json:\"seat_id\"`\n}\n\nvar", "SeatID int64 `json:\"seat_id\" server:\"session\"`\n}\n\nvar",

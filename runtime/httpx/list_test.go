@@ -28,7 +28,7 @@ func serveList[I any](t *testing.T, body string) (*httptest.ResponseRecorder, Er
 	t.Helper()
 	var got *I
 	rec := httptest.NewRecorder()
-	h := Bind(func(_ context.Context, in I) (out, error) { got = &in; return out{OK: true}, nil })
+	h := Bind(Public, func(_ context.Context, in I) (out, error) { got = &in; return out{OK: true}, nil })
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
 	var eb ErrorBody
 	_ = json.Unmarshal(rec.Body.Bytes(), &eb)

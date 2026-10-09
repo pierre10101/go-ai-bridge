@@ -20,7 +20,7 @@ func serve(t *testing.T) (func(cookie, target, body string) *httptest.ResponseRe
 	httpx.Now = func() time.Time { return time.Unix(t0, 0) }
 	t.Cleanup(func() { httpx.Now = now })
 	mux := http.NewServeMux()
-	mux.Handle(confirm_many.Route, httpx.Bind(confirm_many.New(db.New(txn.DB(conn))).Handle))
+	mux.Handle(confirm_many.Route, httpx.Bind(confirm_many.Roles, confirm_many.New(db.New(txn.DB(conn))).Handle))
 	post := func(cookie, target, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
 		if cookie != "" {

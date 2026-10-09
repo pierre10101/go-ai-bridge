@@ -1,2 +1,2 @@
-testdata/bad/claim_unchecked/action.go:44:2: refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check). After a Q6 claim, stop unless exactly one row changed: if <changed> != 1 { return Output{}, F<n> }
-testdata/bad/claim_unchecked/action.go:56:5: refused: comparison claimed > 1 on a claim's changed-row count is not in the allowed pattern list (S10 claim check). Compare a Q6 result only as != 1 (the check), == 1 or == 0
+testdata/bad/claim_unchecked/action.go:45:2: refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check). After a Q6 claim, stop unless exactly one row changed: if <changed> != 1 { return Output{}, F<n> }
+testdata/bad/claim_unchecked/action.go:57:5: refused: comparison claimed > 1 on a claim's changed-row count is not in the allowed pattern list (S10 claim check). Compare a Q6 result only as != 1 (the check), == 1 or == 0

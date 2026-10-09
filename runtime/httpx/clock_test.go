@@ -37,7 +37,7 @@ func TestClockRuleServerSetsNow(t *testing.T) {
 	at := time.Date(2026, 10, 8, 12, 0, 0, 999, time.UTC)
 	withClock(t, at)
 	rec := httptest.NewRecorder()
-	Bind(echoNow).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"seat_id":7}`)))
+	Bind(Public, echoNow).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"seat_id":7}`)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
@@ -51,7 +51,7 @@ func TestClockRuleServerSetsNow(t *testing.T) {
 func TestClockRuleCallerCannotSendNow(t *testing.T) {
 	ran := false
 	rec := httptest.NewRecorder()
-	Bind(func(ctx context.Context, in clockIn) (clockOut, error) { ran = true; return echoNow(ctx, in) }).
+	Bind(Public, func(ctx context.Context, in clockIn) (clockOut, error) { ran = true; return echoNow(ctx, in) }).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"seat_id":7,"now":1}`)))
 	var eb ErrorBody
 	_ = json.Unmarshal(rec.Body.Bytes(), &eb)
@@ -64,7 +64,7 @@ func TestClockRuleCallerCannotSendNow(t *testing.T) {
 // while other fields stay required (InputRule).
 func TestClockRuleOtherFieldsStillRequired(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Bind(echoNow).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{}`)))
+	Bind(Public, echoNow).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{}`)))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `required field \"seat_id\" is missing`) ||
 		strings.Contains(rec.Body.String(), `"now\"`) {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body)
@@ -81,7 +81,7 @@ func TestClockRuleOnGET(t *testing.T) {
 	}
 	var got getIn
 	mux := http.NewServeMux()
-	mux.Handle("GET /x/{id}", Bind(func(_ context.Context, in getIn) (clockOut, error) { got = in; return clockOut{}, nil }))
+	mux.Handle("GET /x/{id}", Bind(Public, func(_ context.Context, in getIn) (clockOut, error) { got = in; return clockOut{}, nil }))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x/3", nil))
 	if rec.Code != http.StatusOK || got.ID != 3 || got.Now != at.Unix() {

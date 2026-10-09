@@ -6,7 +6,8 @@ at once. Either every requested ticket is sold to them, or none is: a
 basket where one ticket can no longer be sold must not end up half bought.
 
 ## Who
-The visitor whose session cookie identifies them (no login in this example).
+Anyone, signed in or not: the visitor whose session cookie identifies them
+(no sign-in is needed).
 
 ## Inputs
 - `ticket_ids` — the tickets to buy: 1 to 20 ticket ids, each at most once.

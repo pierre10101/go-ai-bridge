@@ -6,7 +6,8 @@ never hold the same seat, and a hold that is not confirmed in time frees the
 seat for someone else.
 
 ## Who
-The visitor whose session cookie identifies them (no login in this example).
+Anyone, signed in or not: the visitor whose session cookie identifies them
+(no sign-in is needed).
 Who holds the seat is always that session, never an id sent in the request.
 
 ## Inputs

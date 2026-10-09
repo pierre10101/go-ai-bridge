@@ -10,6 +10,7 @@ import (
 	"example.com/fixtures/internal/domain"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 const Route = "POST /invoices"
@@ -52,3 +53,6 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	}
 	return Output{}, nil
 }
+
+// Roles: anyone may call it (A1); this fixture is about another rule.
+var Roles = httpx.Public

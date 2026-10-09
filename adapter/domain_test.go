@@ -8,7 +8,7 @@ import (
 )
 
 // copyModule builds a scratch copy of the fixture app (testdata/go.mod, its
-// internal/domain and good/create_invoice as features/create_invoice: action.go
+// internal/domain, cmd/server (the app's roles, A2) and good/create_invoice as features/create_invoice: action.go
 // + queries), applying edits (path relative to the app root -> rewrite) on the
 // way. It returns the slice directory.
 func copyModule(t *testing.T, edits map[string]func(string) string) string {
@@ -16,7 +16,7 @@ func copyModule(t *testing.T, edits map[string]func(string) string) string {
 	const fixtures = "testdata"
 	dst := t.TempDir()
 	files := map[string]string{"go.mod": "go.mod", "features/create_invoice/action.go": "good/create_invoice/action.go"}
-	for _, pattern := range []string{"internal/domain/*.go", "good/create_invoice/queries/*.sql"} {
+	for _, pattern := range []string{"internal/domain/*.go", "good/create_invoice/queries/*.sql", "cmd/server/*.go"} {
 		m, err := filepath.Glob(filepath.Join(fixtures, pattern))
 		if err != nil {
 			t.Fatal(err)
@@ -188,7 +188,8 @@ func TestDomainRendering(t *testing.T) {
 
 // TestBoundNeedsTxn: TxRule is only true if the slice's queries are built on
 // the runtime's txn.DB, so a route bound with httpx.Bind over a plain *sql.DB
-// is refused, and so is a binding through an app's own httpx package.
+// is refused, and so is a binding through an app's own httpx package, or
+// one that does not pass the slice's own Roles (A3).
 func TestBoundNeedsTxn(t *testing.T) {
 	routes := `package main
 
@@ -200,23 +201,27 @@ import (
 )
 
 func Routes(db any) {
-	mux.Handle(create_invoice.Route, httpx.Bind(create_invoice.New(createdb.New(DB)).Handle))
+	mux.Handle(create_invoice.Route, httpx.Bind(ROLES, create_invoice.New(createdb.New(DB)).Handle))
 }
 `
-	const refused = "is not served with github.com/pierre10101/go-ai-bridge/runtime/httpx.Bind over queries built on github.com/pierre10101/go-ai-bridge/runtime/txn.DB"
+	const refused = "is not served with github.com/pierre10101/go-ai-bridge/runtime/httpx.Bind(create_invoice.Roles, ...) over queries built on github.com/pierre10101/go-ai-bridge/runtime/txn.DB (H1, A3)"
 	ownHTTPX := func(s string) string {
 		return strings.Replace(s, `"github.com/pierre10101/go-ai-bridge/runtime/httpx"`, `"example.com/app/internal/httpx"`, 1)
 	}
 	same := func(s string) string { return s }
+	// A3: Bind gets the slice's own Roles, not another slice's or a literal.
+	otherRoles := func(s string) string { return strings.Replace(s, "ROLES", "create_event.Roles", 1) }
+	publicRoles := func(s string) string { return strings.Replace(s, "ROLES", "httpx.Public", 1) }
 	for _, tc := range []struct {
 		db, want string
 		edit     func(string) string
-	}{{"txn.DB(db)", "", same}, {"db", refused, same}, {"txn.DB(db)", refused, ownHTTPX}} {
+	}{{"txn.DB(db)", "", same}, {"db", refused, same}, {"txn.DB(db)", refused, ownHTTPX},
+		{"txn.DB(db)", refused, otherRoles}, {"txn.DB(db)", refused, publicRoles}} {
 		root := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(root, "cmd", "server"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		src := tc.edit(strings.Replace(routes, "createdb.New(DB)", "createdb.New("+tc.db+")", 1))
+		src := strings.Replace(tc.edit(strings.Replace(routes, "createdb.New(DB)", "createdb.New("+tc.db+")", 1)), "ROLES", "create_invoice.Roles", 1)
 		if err := os.WriteFile(filepath.Join(root, "cmd", "server", "routes.go"), []byte(src), 0o644); err != nil {
 			t.Fatal(err)
 		}

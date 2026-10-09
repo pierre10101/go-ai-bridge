@@ -5,7 +5,8 @@ A person who holds a seat can give it back before the hold runs out, so
 someone else can take it. Only the session that holds the seat can free it.
 
 ## Who
-The visitor whose session cookie identifies them (no login in this example).
+Anyone, signed in or not: the visitor whose session cookie identifies them
+(no sign-in is needed).
 
 ## Inputs
 - `seat_id` — the seat to release.

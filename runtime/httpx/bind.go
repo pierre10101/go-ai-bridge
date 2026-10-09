@@ -9,7 +9,8 @@
 // declarations below (BadInput, Internal, SuccessStatus, InputRule,
 // QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ErrorBody, ClockRule in
 // clock.go, SessionCookie, SessionRule, SessionValue and ServerSetWhen in
-// session.go, and ListRule, ListRuleExact, ListElems and ListWhen in
+// session.go, PublicRule, RolesRule, Unauthenticated, Forbidden, UserRule,
+// RoleRule, SignedOutRule and SignedOutZero in access.go, and ListRule, ListRuleExact, ListElems and ListWhen in
 // list.go) to write the HTTP and transaction sentences of every slice's
 // .en file. Bind answers only through them, and the tests in this package
 // prove each sentence, so the English cannot drift from what Bind does.
@@ -99,14 +100,21 @@ type ErrorDetail struct {
 }
 
 // Bind turns Handle(ctx, Input) (Output, error) into an http.Handler:
-// strict JSON in (every field required), Handle run in one transaction
-// (txn.Run: committed on success, rolled back on any error or failed
-// assertion), JSON out, *failure.Failure mapped to its status.
-func Bind[I any, O any](handle func(context.Context, I) (O, error)) http.Handler {
+// first who may call it (access, the action's declared Roles: RolesRule,
+// Unauthenticated, Forbidden; before the request is read), then strict
+// JSON in (every field required), Handle run in one transaction (txn.Run:
+// committed on success, rolled back on any error or failed assertion), JSON
+// out, *failure.Failure mapped to its status.
+func Bind[I any, O any](access Access, handle func(context.Context, I) (O, error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer recoverViolation(w)
+		c := signedIn[I](r) // Identify: the app's sign-in hook
+		if o, denied := access.denied(c); denied {
+			writeOutcome(w, o, "") // RolesRule: Handle does not run
+			return
+		}
 		var in I
-		msg := serverSetSent[I](r) // ClockRule, SessionRule: never from the query string
+		msg := serverSetSent[I](r) // ClockRule, SessionRule, UserRule, RoleRule: never from the query string
 		if msg == "" {
 			if r.Method == http.MethodGet && hasParamTags[I]() {
 				in, msg = decodeParams[I](r)
@@ -118,8 +126,8 @@ func Bind[I any, O any](handle func(context.Context, I) (O, error)) http.Handler
 			writeOutcome(w, BadInput, msg)
 			return
 		}
-		stampClock(&in)      // ClockRule
-		stampSession(&in, r) // SessionRule
+		stampClock(&in)        // ClockRule
+		stampServer(&in, r, c) // SessionRule, UserRule, RoleRule
 		run := txn.Run[O]
 		if r.Method == http.MethodGet {
 			run = txn.Read[O] // ReadTxRule

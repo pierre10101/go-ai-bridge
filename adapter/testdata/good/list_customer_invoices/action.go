@@ -11,11 +11,16 @@ import (
 	"example.com/fixtures/internal/domain"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 	"github.com/pierre10101/go-ai-bridge/runtime/page"
 )
 
 // Route is the HTTP contract (Go 1.22 method + path pattern).
 const Route = "GET /customers/{id}/invoices"
+
+// Roles: only signed-in finance staff and admins may call it (A1); httpx.Bind
+// answers anyone else with 401 or 403 before the action runs.
+var Roles = httpx.Roles("finance", "admin")
 
 // Input is what the caller sends (path + query on GET).
 type Input struct {

@@ -10,8 +10,9 @@ import (
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 )
 
-// Server-set inputs. An Input field tagged `clock:"now"` (grammar T1) or
-// `server:"session"` (grammar T2) is filled by Bind, never by the caller:
+// Server-set inputs. An Input field tagged `clock:"now"` (grammar T1),
+// `server:"session"` (grammar T2), `server:"user"` or `server:"role"`
+// (grammar T3, see access.go) is filled by Bind, never by the caller:
 // a request whose body or query string names such a field (in any letter
 // case) is answered with BadInput and the action does not run.
 
@@ -82,8 +83,13 @@ func serverSetSent[I any](r *http.Request) string {
 // serverSetMessage is the BadInput message for a caller-sent server field.
 func serverSetMessage(f reflect.StructField, name string) string {
 	what := "the current time"
-	if f.Tag.Get(serverTag) != "" {
+	switch f.Tag.Get(serverTag) {
+	case sessionTag:
 		what = "the session cookie " + SessionCookie
+	case userTag:
+		what = "the signed-in user"
+	case roleTag:
+		what = "the signed-in user's role"
 	}
 	return fmt.Sprintf("field %q is set by the server (%s); do not send it", name, what)
 }
@@ -97,35 +103,62 @@ func fieldName(f reflect.StructField) string {
 	return name
 }
 
-// stampSession sets every `server:"session"` field of *in from the request's
-// SessionCookie (SessionRule). Any other server tag or type is a bug in the
-// slice (bridge-en refuses it too): an assertion, so HTTP 500.
-func stampSession[I any](in *I, r *http.Request) {
+// stampServer sets every `server:"..."` field of *in: "session" from the
+// request's SessionCookie (SessionRule), "user" and "role" from the caller
+// Identify found (UserRule, RoleRule; zero when c is nil). Any other server
+// tag or type is a bug in the slice (bridge-en refuses it too): an
+// assertion, so HTTP 500.
+func stampServer[I any](in *I, r *http.Request, c *caller) {
 	v := reflect.ValueOf(in).Elem()
 	if v.Kind() != reflect.Struct {
 		return
 	}
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Type().Field(i)
-		if f.Tag.Get(serverTag) == "" {
+		tag := f.Tag.Get(serverTag)
+		if tag == "" {
 			continue
 		}
 		k := f.Type.Kind()
-		assert.Pre(f.Tag.Get(serverTag) == sessionTag && (k == reflect.Int64 || k == reflect.String),
-			"a server field is int64 or string tagged server:\"session\"")
-		raw, ok := sessionCookie(r)
-		switch k {
-		case reflect.Int64:
-			n, valid := parseSessionInt(raw)
-			if !ok || !valid {
-				n = 0
+		switch tag {
+		case sessionTag:
+			assert.Pre(k == reflect.Int64 || k == reflect.String, "a server:\"session\" field is int64 or string")
+			raw, ok := sessionCookie(r)
+			switch k {
+			case reflect.Int64:
+				n, valid := parseSessionInt(raw)
+				if !ok || !valid {
+					n = 0
+				}
+				v.Field(i).SetInt(n)
+			case reflect.String:
+				if !ok || !validSessionText(raw) {
+					raw = ""
+				}
+				v.Field(i).SetString(raw)
 			}
-			v.Field(i).SetInt(n)
-		case reflect.String:
-			if !ok || !validSessionText(raw) {
-				raw = ""
+		case userTag:
+			assert.Pre(k == reflect.Int64 || k == reflect.String, "a server:\"user\" field is int64 or string")
+			switch {
+			case k == reflect.Int64 && c != nil:
+				n, _ := parseSessionInt(c.user) // signedIn already refused any other value
+				v.Field(i).SetInt(n)
+			case k == reflect.Int64:
+				v.Field(i).SetInt(0)
+			case c != nil:
+				v.Field(i).SetString(c.user)
+			default:
+				v.Field(i).SetString("")
 			}
-			v.Field(i).SetString(raw)
+		case roleTag:
+			assert.Pre(k == reflect.String, "a server:\"role\" field is a string")
+			role := ""
+			if c != nil {
+				role = c.role
+			}
+			v.Field(i).SetString(role)
+		default:
+			assert.Pre(false, "a server field is tagged server:\"session\", \"user\" or \"role\"")
 		}
 	}
 }

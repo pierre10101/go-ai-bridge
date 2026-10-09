@@ -20,12 +20,46 @@ func serveList(t *testing.T, path string) *httptest.ResponseRecorder {
 	return serveListOn(conn, path)
 }
 
+// serveListOn calls the route signed in as finance staff, the way
+// cmd/server/routes.go wires it.
 func serveListOn(conn *sql.DB, path string) *httptest.ResponseRecorder {
+	return serveListAs(conn, path, "finance")
+}
+
+// appRoles is the list cmd/server/routes.go declares (AppRoles).
+var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin")
+
+// serveListAs wires the slice exactly like cmd/server/routes.go, with a
+// sign-in hook that says the caller is user 5 in role ("" = not signed in).
+func serveListAs(conn *sql.DB, path, role string) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
-	mux.Handle(list_customer_invoices.Route, httpx.Bind(list_customer_invoices.New(db.New(txn.DB(conn))).Handle))
+	mux.Handle(list_customer_invoices.Route, httpx.Bind(list_customer_invoices.Roles, list_customer_invoices.New(db.New(txn.DB(conn))).Handle))
+	identity := func(*http.Request) (string, string, bool) { return "5", role, role != "" }
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	httpx.Identify(appRoles, identity, mux).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 	return rec
+}
+
+// Only finance staff and admins may list invoices: 401 when not signed in,
+// 403 for any other role, before the action runs (no read-only transaction
+// is opened, so a bad page limit is not even looked at).
+func TestHTTPListOnlyFinanceAndAdmin(t *testing.T) {
+	_, conn := newAction(t)
+	seedInvoices(t, conn, 1)
+	for role, want := range map[string]httpx.Outcome{"": httpx.Unauthenticated, "customer": httpx.Forbidden, "organizer": httpx.Forbidden} {
+		for _, path := range []string{"/customers/1/invoices", "/customers/1/invoices?limit=0"} {
+			rec := serveListAs(conn, path, role)
+			var body httpx.ErrorBody
+			if json.Unmarshal(rec.Body.Bytes(), &body) != nil || rec.Code != want.Status || body.Error.ID != want.ID {
+				t.Errorf("role %q %s: status %d %s", role, path, rec.Code, rec.Body)
+			}
+		}
+	}
+	for _, role := range []string{"finance", "admin"} {
+		if rec := serveListAs(conn, "/customers/1/invoices", role); rec.Code != http.StatusOK {
+			t.Errorf("role %s: status %d %s", role, rec.Code, rec.Body)
+		}
+	}
 }
 
 func TestHTTPListReturns200(t *testing.T) {

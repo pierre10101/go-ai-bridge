@@ -20,13 +20,46 @@ func serve(t *testing.T, body string) *httptest.ResponseRecorder {
 	return serveOn(conn, body)
 }
 
-// serveOn wires the slice exactly like cmd/server/routes.go.
+// serveOn calls the route signed in as finance staff.
 func serveOn(conn *sql.DB, body string) *httptest.ResponseRecorder {
+	return serveAs(conn, body, "finance")
+}
+
+// appRoles is the list cmd/server/routes.go declares (AppRoles).
+var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin")
+
+// serveAs wires the slice exactly like cmd/server/routes.go, with a sign-in
+// hook that says the caller is user 5 in role ("" = not signed in).
+func serveAs(conn *sql.DB, body, role string) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
-	mux.Handle(create_invoice.Route, httpx.Bind(create_invoice.New(db.New(txn.DB(conn))).Handle))
+	mux.Handle(create_invoice.Route, httpx.Bind(create_invoice.Roles, create_invoice.New(db.New(txn.DB(conn))).Handle))
+	identity := func(*http.Request) (string, string, bool) { return "5", role, role != "" }
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/invoices", strings.NewReader(body)))
+	httpx.Identify(appRoles, identity, mux).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/invoices", strings.NewReader(body)))
 	return rec
+}
+
+// "Who may call it: signed-in users with role `finance` or `admin`." Not
+// signed in: 401; any other role: 403; the action does not run, so no
+// invoice is written. Both allowed roles create one.
+func TestHTTPOnlyFinanceAndAdminCreate(t *testing.T) {
+	const body = `{"customer_id":1,"amount_cents":1500,"currency":"ZAR"}`
+	for role, want := range map[string]httpx.Outcome{"": httpx.Unauthenticated, "customer": httpx.Forbidden, "organizer": httpx.Forbidden} {
+		_, conn := newAction(t)
+		rec := serveAs(conn, body, role)
+		if eb := errorBody(t, rec); rec.Code != want.Status || eb.Error.ID != want.ID || eb.Error.Message != want.Message {
+			t.Errorf("role %q: status %d %s", role, rec.Code, rec.Body)
+		}
+		if countInvoices(t, conn) != 0 {
+			t.Errorf("role %q: the action ran", role)
+		}
+	}
+	for _, role := range []string{"finance", "admin"} {
+		_, conn := newAction(t)
+		if rec := serveAs(conn, body, role); rec.Code != http.StatusCreated || countInvoices(t, conn) != 1 {
+			t.Errorf("role %s: status %d %s", role, rec.Code, rec.Body)
+		}
+	}
 }
 
 func errorBody(t *testing.T, rec *httptest.ResponseRecorder) httpx.ErrorBody {

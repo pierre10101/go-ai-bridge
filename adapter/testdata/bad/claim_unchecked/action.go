@@ -10,6 +10,7 @@ import (
 	"example.com/fixtures/features/claim_unchecked/db"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 const Route = "POST /holds"
@@ -61,3 +62,6 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	assert.Post(out.Now == in.Now, "the answer carries the server's clock")
 	return out, nil
 }
+
+// Roles: anyone may call it (A1); this fixture is about another rule.
+var Roles = httpx.Public

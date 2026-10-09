@@ -100,7 +100,7 @@ func TestF3_NotHeldByThisSession(t *testing.T) {
 func TestF1_HTTPSessionFromCookie(t *testing.T) {
 	_, conn := newAction(t)
 	mux := http.NewServeMux()
-	mux.Handle(release_example.Route, httpx.Bind(release_example.New(db.New(txn.DB(conn))).Handle))
+	mux.Handle(release_example.Route, httpx.Bind(release_example.Roles, release_example.New(db.New(txn.DB(conn))).Handle))
 	post := func(cookie, target, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
 		if cookie != "" {

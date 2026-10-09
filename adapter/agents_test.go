@@ -59,6 +59,7 @@ func TestAgentsSkeletonRenders(t *testing.T) {
 		"set `held_by` = the session from the cookie and `expires_at` = 10 minutes after the current time",
 		"(`held_by` is the text \"\" or `expires_at` is no later than the current time) at that moment",
 		"stop with F1",
+		"Who may call it: anyone, signed in or not.",
 	} {
 		if !strings.Contains(en, w) {
 			t.Errorf("English lacks %q:\n%s", w, en)

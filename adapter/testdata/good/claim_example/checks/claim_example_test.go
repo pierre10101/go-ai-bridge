@@ -118,7 +118,7 @@ func TestF2_HTTPServerSetsSessionAndTime(t *testing.T) {
 	httpx.Now = func() time.Time { return time.Unix(t0, 0) }
 	t.Cleanup(func() { httpx.Now = old })
 	mux := http.NewServeMux()
-	mux.Handle(claim_example.Route, httpx.Bind(claim_example.New(db.New(txn.DB(conn))).Handle))
+	mux.Handle(claim_example.Route, httpx.Bind(claim_example.Roles, claim_example.New(db.New(txn.DB(conn))).Handle))
 	post := func(cookie, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/holds", strings.NewReader(body))
 		if cookie != "" {

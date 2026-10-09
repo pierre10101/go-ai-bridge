@@ -12,9 +12,14 @@ import (
 	"example.com/fixtures/features/claim_example/db"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 const Route = "POST /holds"
+
+// Roles: anyone may call it, signed in or not; the caller is the session
+// from the cookie (A1).
+var Roles = httpx.Public
 
 type Input struct {
 	SeatID  int64 `json:"seat_id"`

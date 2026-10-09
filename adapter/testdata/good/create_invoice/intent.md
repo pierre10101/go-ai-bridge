@@ -5,7 +5,9 @@ Finance staff need to bill a known customer for a single amount and get back a
 stable, human-readable invoice number they can quote on the phone.
 
 ## Who
-An authenticated finance user (auth is out of scope for this example).
+Signed-in users with role `finance` or `admin` (signing in is the app's,
+out of scope here). Anyone else is refused before the action runs: HTTP 401
+when not signed in, HTTP 403 for any other role.
 
 ## Inputs
 - `customer_id` — the customer to bill (must already exist).

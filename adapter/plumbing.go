@@ -52,7 +52,23 @@ type plumbing struct {
 	ListRuleExact      string // D10: a list input whose min equals its max
 	ListElems          map[string]string
 	ListWhen           string // the BadInput condition of an action with a list input
+	PublicRule         string // A1: who may call a Public action
+	RolesRule          string // A1, A3: who may call an action declared with Roles; {roles}
+	Unauthenticated    outcome
+	Forbidden          outcome
+	UserRule           string // T3: how a `server:"user"` Input field is filled; {signed out}
+	RoleRule           string // T3: how a `server:"role"` Input field is filled; {signed out}
+	SignedOutRule      string // T3, Public actions: {zero}
+	SignedOutZero      map[string]string
 	ErrorShape         string
+}
+
+// appRoles is the app-wide role list (A2): the one httpx.AppRoles(...) call
+// in cmd/server.
+type appRoles struct {
+	list []string
+	has  map[string]bool
+	pos  token.Position
 }
 
 // env is everything outside action.go the adapter reads for one slice.
@@ -61,6 +77,7 @@ type env struct {
 	domain  *domainInfo
 	http    *plumbing
 	queries map[string]*SQLQuery
+	roles   *appRoles // nil when cmd/server declares no httpx.AppRoles
 }
 
 // findModuleRoot walks up from dir to the directory holding go.mod.
@@ -134,22 +151,30 @@ func jsonTag(tag *ast.BasicLit) string {
 // any other version, so the quoted sentences are the ones Bind follows.
 func loadHTTPX() (*plumbing, error) {
 	p := &plumbing{
-		BadInput:       outcome(httpx.BadInput),
-		Internal:       outcome(httpx.Internal),
-		Success:        map[string]int{},
-		InputRule:      httpx.InputRule,
-		QueryInputRule: httpx.QueryInputRule,
-		BadQueryWhen:   httpx.BadQueryWhen,
-		TxRule:         httpx.TxRule,
-		ReadTxRule:     httpx.ReadTxRule,
-		ClockRule:      httpx.ClockRule,
-		SessionRule:    httpx.SessionRule,
-		SessionValue:   httpx.SessionValue,
-		ServerSetWhen:  httpx.ServerSetWhen,
-		ListRule:       httpx.ListRule,
-		ListRuleExact:  httpx.ListRuleExact,
-		ListElems:      httpx.ListElems,
-		ListWhen:       httpx.ListWhen,
+		BadInput:        outcome(httpx.BadInput),
+		Internal:        outcome(httpx.Internal),
+		Success:         map[string]int{},
+		InputRule:       httpx.InputRule,
+		QueryInputRule:  httpx.QueryInputRule,
+		BadQueryWhen:    httpx.BadQueryWhen,
+		TxRule:          httpx.TxRule,
+		ReadTxRule:      httpx.ReadTxRule,
+		ClockRule:       httpx.ClockRule,
+		SessionRule:     httpx.SessionRule,
+		SessionValue:    httpx.SessionValue,
+		ServerSetWhen:   httpx.ServerSetWhen,
+		ListRule:        httpx.ListRule,
+		ListRuleExact:   httpx.ListRuleExact,
+		ListElems:       httpx.ListElems,
+		ListWhen:        httpx.ListWhen,
+		PublicRule:      httpx.PublicRule,
+		RolesRule:       httpx.RolesRule,
+		Unauthenticated: outcome(httpx.Unauthenticated),
+		Forbidden:       outcome(httpx.Forbidden),
+		UserRule:        httpx.UserRule,
+		RoleRule:        httpx.RoleRule,
+		SignedOutRule:   httpx.SignedOutRule,
+		SignedOutZero:   httpx.SignedOutZero,
 	}
 	for m, st := range httpx.SuccessStatus {
 		p.Success[m] = st
@@ -168,6 +193,10 @@ func loadHTTPX() (*plumbing, error) {
 		if !strings.Contains(p.ListRule, ph) || (ph != "{max}" && !strings.Contains(p.ListRuleExact, ph)) {
 			return nil, fmt.Errorf("%s/httpx: ListRule and ListRuleExact must mention %s", RuntimePath, ph)
 		}
+	}
+	if !strings.Contains(p.RolesRule, "{roles}") || !strings.Contains(p.SignedOutRule, "{zero}") ||
+		!strings.Contains(p.UserRule, "{signed out}") || !strings.Contains(p.RoleRule, "{signed out}") {
+		return nil, fmt.Errorf("%s/httpx: RolesRule must mention {roles}, SignedOutRule {zero}, UserRule and RoleRule {signed out}", RuntimePath)
 	}
 	shape, err := errorShape(reflect.TypeOf(httpx.ErrorBody{}))
 	if err != nil {
@@ -224,5 +253,74 @@ func loadEnv(dir string) (*env, Refusals, error) {
 		return nil, nil, err
 	}
 	refusals = append(refusals, keyErrs...)
-	return &env{root: root, domain: d, http: h, queries: q}, append(domainErrs, refusals...), nil
+	roles, roleErrs, err := loadAppRoles(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	refusals = append(refusals, roleErrs...)
+	return &env{root: root, domain: d, http: h, queries: q, roles: roles}, append(domainErrs, refusals...), nil
+}
+
+// loadAppRoles reads A2: the app's roles, declared once in cmd/server as
+// httpx.AppRoles("<role>", ...) with the runtime's httpx, every role a
+// distinct lowercase identifier given as a string literal. No declaration
+// is not an error here (an app whose actions are all Public needs none);
+// an action that lists a role then is refused.
+func loadAppRoles(root string) (*appRoles, Refusals, error) {
+	paths, _ := filepath.Glob(filepath.Join(root, "cmd", "server", "*.go"))
+	sort.Strings(paths)
+	fset := token.NewFileSet()
+	var found *appRoles
+	var errs Refusals
+	refuse := func(n ast.Node, construct, hint string) {
+		errs = append(errs, Refusal{Pos: fset.Position(n.Pos()), Construct: construct, Context: "A2 app roles", Hint: hint})
+	}
+	for _, p := range paths {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return nil, nil, err
+		}
+		rel, _ := filepath.Rel(root, p)
+		file, err := parser.ParseFile(fset, filepath.ToSlash(rel), src, 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		hx := importName(file, RuntimePath+"/httpx")
+		if hx == "" {
+			continue
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || exprString(call.Fun) != hx+".AppRoles" {
+				return true
+			}
+			if found != nil {
+				refuse(call, "second httpx.AppRoles call (the first is at "+found.pos.String()+")", "Declare the app's roles once")
+				return true
+			}
+			found = &appRoles{has: map[string]bool{}, pos: fset.Position(call.Pos())}
+			if len(call.Args) == 0 || call.Ellipsis.IsValid() {
+				refuse(call, "httpx.AppRoles without roles", appRolesHint)
+			}
+			for _, a := range call.Args {
+				role, ok := stringLit(a)
+				switch {
+				case !ok:
+					refuse(a, "app role "+exprString(a)+" that is not a string literal", appRolesHint)
+				case !roleRe.MatchString(role) || len(role) > 32:
+					refuse(a, fmt.Sprintf("app role %q that is not a lowercase identifier", role), "A role name is [a-z][a-z0-9_]*, at most 32 characters")
+				case found.has[role]:
+					refuse(a, fmt.Sprintf("app role %q listed twice", role), "List each role once")
+				default:
+					found.has[role] = true
+					found.list = append(found.list, role)
+				}
+			}
+			return true
+		})
+	}
+	return found, errs, nil
 }

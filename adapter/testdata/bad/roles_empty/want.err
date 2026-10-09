@@ -1,0 +1,1 @@
+testdata/bad/roles_empty/action.go:16:5: refused: empty role list httpx.Roles() is not in the allowed pattern list (A1 who may call it). List at least one role, or declare var Roles = httpx.Public for an action anyone may call, signed in or not

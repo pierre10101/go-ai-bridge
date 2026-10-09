@@ -15,6 +15,10 @@ and the rule to follow, and CI fails. Each feature also starts with an
 `bridge-en` refuses code whose failure cases differ from the intent. Reviewers
 compare the two: what was asked, and what was built.
 
+- Every action declares who may call it (`httpx.Roles(...)` or
+  `httpx.Public`); the runtime refuses anyone else with 401 or 403 before the
+  action runs. Sign-in, passwords and sessions stay in your app; it tells the
+  runtime who is signed in through one hook (`httpx.Identify`).
 - [RULEBOOK.md](RULEBOOK.md) is the reference: every rule with an example, its
   English and a refused example. `bridge-en -grammar` prints the rule list.
 - One Go module, `github.com/pierre10101/go-ai-bridge`: the `bridge-en`
@@ -36,10 +40,10 @@ same version (`-check` refuses any other).
 ```sh
 mkdir seat-app && cd seat-app && git init -q
 go mod init example.com/seat-app
-go get github.com/pierre10101/go-ai-bridge@v0.2.0
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.2.0
+go get github.com/pierre10101/go-ai-bridge@v0.3.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.3.0
 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-bridge-en -version                      # bridge-en 0.2.0
+bridge-en -version                      # bridge-en 0.3.0
 ```
 
 **2. Init.** Writes the instructions for AI agents (and you). Documents only,
@@ -75,10 +79,13 @@ session from the cookie, never an id sent in the request.
   is written.
 ```
 
-The action takes the caller from the server, never from the request body:
-``Session string `json:"session" server:"session"` `` (from the session
-cookie) and ``Now int64 `json:"now" clock:"now"` `` (the server's clock). The
-claim stores when the hold ends and compares it with `now`:
+The action declares who may call it, ``var Roles = httpx.Public`` (anyone,
+signed in or not; an action for some users only says
+``httpx.Roles("organizer", "admin")``), and takes the caller from the server,
+never from the request body: ``Session string `json:"session" server:"session"` ``
+(from the session cookie) and ``Now int64 `json:"now" clock:"now"` `` (the
+server's clock); a signed-in user would be ``User int64 `json:"user" server:"user"` ``.
+The claim stores when the hold ends and compares it with `now`:
 
 ```sql
 -- name: ClaimSeat :execrows
@@ -88,7 +95,7 @@ WHERE id = sqlc.arg(id) AND (held_by = '' OR expires_at <= sqlc.arg(now));
 ```
 
 Then `sqlc generate`, `action.go`, one check per F-ID in `checks/`, and one
-line in `routes.go`. AGENTS.md has this feature in full; an agent can write
+line in `routes.go`: `mux.Handle(hold_seat.Route, httpx.Bind(hold_seat.Roles, ...))`. AGENTS.md has this feature in full; an agent can write
 it from there.
 
 **5. Check, then write the English.**
@@ -181,7 +188,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0   # the version go.mod pins
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0   # the version go.mod pins
       - run: go test ./...
       - run: bridge-en -check features/*/
   english:
@@ -195,8 +202,8 @@ jobs:
         with: { fetch-depth: 0 }    # the comment diffs against the PR's base
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.2.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.3.0
         # with: { features: "features/*/", max-chars: "60000" }
 ```
 
@@ -222,6 +229,49 @@ git diff                         # review every .en change, then open a PR
 
 A new version can change the English of every feature (new wording, new
 rules); the `.en` diff in that pull request shows exactly how.
+
+### 0.2.x to 0.3.0: breaking change (who may call each action)
+
+0.3.0 adds sign-in and roles, and it is a **breaking change**: every action
+must now say who may call it, and `cmd/server` must pass that to
+`httpx.Bind`. An app whose CI passed on 0.2.x fails `-check` (and does not
+compile: `httpx.Bind` takes the Roles first) until it is migrated.
+Password hashing, sign-in and sessions stay in the app; bridge-en only
+receives who is signed in and their role.
+
+1. **A1:** in every `features/<slice>/action.go`, import
+   `github.com/pierre10101/go-ai-bridge/runtime/httpx` and declare, once,
+   `var Roles = httpx.Public` (anyone, signed in or not: what every 0.2.x
+   action was) or `var Roles = httpx.Roles("<role>", ...)` (signed-in users
+   with one of these roles). There is no default; `-check` refuses an
+   action without it (`action.go without a Roles declaration ... (A1 who may call it)`).
+2. **A2:** if any action lists roles, declare the app's roles once in
+   `cmd/server`: `var AppRoles = httpx.AppRoles("customer", "organizer", "admin")`
+   (lowercase identifiers). A role an action lists must be one of them.
+3. **A3:** in `cmd/server/routes.go`, bind each route with its own Roles,
+   `mux.Handle(<slice>.Route, httpx.Bind(<slice>.Roles, <slice>.New(db.New(txn.DB(conn))).Handle))`,
+   and serve the mux through the app's sign-in hook:
+   `return httpx.Identify(AppRoles, identity, mux)`, where `identity` is a
+   `func(r *http.Request) (user, role string, ok bool)` the app writes
+   (typically: read its own session cookie, look the session up in its
+   store). Without `httpx.Identify` nobody is signed in, so only `Public`
+   routes answer.
+4. **T3:** an action that needs the signed-in user takes
+   ``User int64 `json:"user" server:"user"` `` (or `string`) and, if it needs
+   the role, ``Role string `json:"role" server:"role"` ``. A request that
+   sends `user` or `role` gets HTTP 400. A request field named `user`,
+   `role`, `user_id` or `role_id` is refused: rename a field about someone
+   else (for example `member_id`).
+5. Run `bridge-en -check features/*/`, then `bridge-en -write features/*/`.
+   Every `.en` gains one line under the route ("Who may call it: ..."), and
+   role-restricted actions gain the HTTP 401 and 403 answers. Review them.
+6. Update the `checks/` that build a route by hand: `httpx.Bind(<slice>.Roles, ...)`,
+   behind `httpx.Identify` with a test hook for role-restricted routes. Add
+   checks for 401, 403 and an allowed role that confirm nothing is written
+   on 401/403.
+7. Run `bridge-en init -force` to get the 0.3.0 `AGENTS.md` (the Roles
+   declaration is required; the identity comes from `server:"user"`, never
+   the body).
 
 ### 0.1.x to 0.2.0: breaking change (intent.md)
 
@@ -329,11 +379,13 @@ and publishes the archives, `RULEBOOK.md` and `SHA256SUMS`.
 | `adapter TestRulebook`, `TestCoverageNeedsReference` | intent F-IDs = action F-IDs = covered F-IDs; no dead SQL; routes bound via `httpx.Bind` over `txn.DB` |
 | `adapter TestAgentsSkeletonRenders` | the example feature in the generated AGENTS.md passes I1-I3 and renders |
 | `adapter TestRulebookCoversGrammar` | RULEBOOK.md has exactly one section per rule ID |
+| `adapter TestRolesContract`, `TestRolesRefusals`, `TestAppRoles` | A1-A3, T3: who may call each action, the app-wide role list, the signed-in user and role in the English, and every refused form |
+| `runtime/httpx TestRolesRule`, `TestZeroAccessDeniesEveryone`, `TestPublicRule`, `TestUserAndRoleAreNeverSent` | 401 / 403 before the action runs, deny by default, the signed-in user and role filled by the server and never accepted from the request |
 | `adapter TestClock*`, `TestSession*`, `TestRollbackWording`, `TestStrictClaimCheck`, `TestMultiRowClaim*`, `TestINShapes`, `TestPrimaryKeys`, `TestSQLShapes`, `TestClaimRules`, `TestRefusalsInHandle`, `TestDomainUnderGrammar`, `TestBoundNeedsTxn`, `TestCheckPin` | the exact English and refusals of each rule (see RULEBOOK.md) |
 | `internal/initdocs Test*` | init writes only the five documents, keeps existing files without `-force`, and AGENTS.md covers the workflow |
 | `internal/prcomment Test*` | the comment shows each changed feature's intent (full or diff) and `.en` diff, starts with its marker, is the same on every run, and stays under its size limit |
 | `runtime/... Test*` | every HTTP and transaction sentence the English quotes |
-| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency |
+| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency; over HTTP, 401, 403 and the allowed roles (create_event, create_invoice, list_customer_invoices), nothing written on 401/403 |
 
 ## License
 

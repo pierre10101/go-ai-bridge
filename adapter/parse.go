@@ -23,8 +23,9 @@ import (
 type Field struct {
 	Name, JSON, Type, Line string
 	Domain                 string // domain type name, for domain.<T> fields
-	ServerSet              string // "clock" (T1, `clock:"now"`) or "session" (T2, `server:"session"`): filled by httpx, never sent
+	ServerSet              string // "clock" (T1, `clock:"now"`), "session" (T2, `server:"session"`), "user" or "role" (T3): filled by httpx, never sent
 	List                   string // D10 list input: the element type (int64 or string); "" for any other field
+	goType                 string // the Go type as written (int64, string, ...)
 	pos                    token.Position
 }
 
@@ -56,7 +57,11 @@ type Step struct {
 type Feature struct {
 	Dir, Package, Title, Method, Path                          string
 	Input, Output                                              []Field
-	BodyInput, ServerSet                                       []Field // Input split: sent by the caller / set by the server (T1, T2)
+	BodyInput, ServerSet                                       []Field  // Input split: sent by the caller / set by the server (T1, T2, T3)
+	Public                                                     bool     // A1: var Roles = httpx.Public
+	Roles                                                      []string // A1: var Roles = httpx.Roles(...), in declared order
+	AccessLine                                                 string   // A1: who may call it (httpx.PublicRule or httpx.RolesRule)
+	rolesSeen                                                  bool
 	ServerIntro                                                string
 	InputCount, InputIntro, InputRule, ErrorShape, SuccessLine string
 	DataLine, NoPre, InternalStatus, TxLine                    string
@@ -77,6 +82,7 @@ var (
 	snakeRe = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
 	routeRe = regexp.MustCompile(`^(GET|POST|PUT|PATCH|DELETE) (/[a-z0-9_{}/-]*)$`)
 	fidRe   = regexp.MustCompile(`^F[1-9][0-9]*$`)
+	roleRe  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 
 // statusCodes is the closed list of statuses a failure case may use.
@@ -186,6 +192,9 @@ func (w *walker) decls(file *ast.File) {
 			seen[d.Name.Name] = true
 		}
 	}
+	if !w.f.rolesSeen {
+		w.refuse(file.Name, "action.go without a Roles declaration", "A1 who may call it", rolesHint)
+	}
 	if handle != nil {
 		w.handle(handle) // last, so every F-ID and import is known
 	}
@@ -225,7 +234,12 @@ func (w *walker) genDecl(pkg string, d *ast.GenDecl, seen map[string]bool) {
 		}
 	case token.VAR:
 		for _, s := range d.Specs {
-			w.failureDecl(s.(*ast.ValueSpec))
+			vs := s.(*ast.ValueSpec)
+			if len(vs.Names) == 1 && vs.Names[0].Name == "Roles" {
+				w.rolesDecl(vs)
+				continue
+			}
+			w.failureDecl(vs)
 		}
 	}
 }
@@ -251,6 +265,8 @@ func (w *walker) importSpec(pkg string, is *ast.ImportSpec) {
 		name = "failure"
 	case path == RuntimePath+"/page":
 		name = "page"
+	case path == RuntimePath+"/httpx":
+		name = "httpx" // only for var Roles (A1); Handle never uses it
 	case strings.HasSuffix(path, "/internal/domain"):
 		name = "domain"
 	case strings.HasSuffix(path, "/features/"+pkg+"/db"):
@@ -258,7 +274,7 @@ func (w *walker) importSpec(pkg string, is *ast.ImportSpec) {
 	}
 	if name == "" {
 		w.refuse(is, fmt.Sprintf("import %q", path), "D2 imports",
-			"Allowed: context, net/http, "+RuntimePath+"/{assert,failure,page}, <module>/internal/domain, <module>/features/"+pkg+"/db")
+			"Allowed: context, net/http, "+RuntimePath+"/{assert,failure,page,httpx}, <module>/internal/domain, <module>/features/"+pkg+"/db")
 		return
 	}
 	w.pkgs[name] = true
@@ -328,26 +344,46 @@ func (w *walker) fields(ts *ast.TypeSpec, ctx string, limit bool) []Field {
 		}
 		if sv := structTag(fl.Tag, "server"); sv != "" {
 			typName := types.ExprString(fl.Type)
+			ctxRule := "T2 session is passed in"
+			if sv == "user" || sv == "role" {
+				ctxRule = "T3 user, role passed in"
+			}
 			value, typed := w.env.http.SessionValue[typName]
 			switch {
 			case ctx != "D4 input":
-				w.refuse(fl, "server tag on "+name+" outside Input", "T2 session is passed in", "Only an Input field can be set by the server")
+				w.refuse(fl, "server tag on "+name+" outside Input", ctxRule, "Only an Input field can be set by the server")
 			case server != "":
-				w.refuse(fl, "field "+name+" tagged both clock and server", "T2 session is passed in", "A server-set field is either the current time (T1) or the session (T2)")
-			case sv != "session":
-				w.refuse(fl, "server field "+name+" tagged server:"+strconv.Quote(sv), "T2 session is passed in", sessionHint)
+				w.refuse(fl, "field "+name+" tagged both clock and server", ctxRule, "A server-set field is either the current time (T1), the session (T2), or the signed-in user or role (T3)")
+			case sv != "session" && sv != "user" && sv != "role":
+				w.refuse(fl, "server field "+name+" tagged server:"+strconv.Quote(sv), "T2 session is passed in", sessionHint+`; or (T3) User int64 `+"`json:\"user\" server:\"user\"`"+` (or string) and Role string `+"`json:\"role\" server:\"role\"`")
+			case sv == "role" && typName != "string":
+				w.refuse(fl, "server field "+name+" of type "+typName, ctxRule, userHint)
 			case !typed:
-				w.refuse(fl, "server field "+name+" of type "+typName, "T2 session is passed in", sessionHint)
+				w.refuse(fl, "server field "+name+" of type "+typName, ctxRule, map[bool]string{true: sessionHint, false: userHint}[sv == "session"])
 			case structTag(fl.Tag, "path") != "" || structTag(fl.Tag, "query") != "":
-				w.refuse(fl, "server field "+name+" with a path or query tag", "T2 session is passed in", "The session comes from the cookie only; drop the path/query tag")
+				w.refuse(fl, "server field "+name+" with a path or query tag", ctxRule, "A server-set value never comes from the path or the query string; drop the path/query tag")
+			case sv != "session" && tag != sv:
+				w.refuse(fl, fmt.Sprintf("server:%q field %s with json name %q", sv, name, tag), ctxRule,
+					fmt.Sprintf("Its json name is %q, so the English and the HTTP 400 for a request that sends it name it the same: %s", sv, userHint))
 			}
 			for _, prev := range out {
-				if prev.ServerSet == "session" {
-					w.refuse(fl, "second session field "+name, "T2 session is passed in", "An Input has at most one server:\"session\" field")
+				if prev.ServerSet == sv {
+					w.refuse(fl, "second "+sv+" field "+name, ctxRule, "An Input has at most one server:"+strconv.Quote(sv)+" field")
 				}
 			}
-			server = "session"
-			line = fmt.Sprintf(docSentences["field"], tag, strings.NewReplacer("{valid}", value.Valid, "{zero}", value.Zero).Replace(w.env.http.SessionRule))
+			server = sv
+			switch sv {
+			case "session":
+				line = fmt.Sprintf(docSentences["field"], tag, strings.NewReplacer("{valid}", value.Valid, "{zero}", value.Zero).Replace(w.env.http.SessionRule))
+			default:
+				line = "" // T3: filled in finish, once Roles (Public or not) is known
+			}
+		}
+		if server == "" && ctx == "D4 input" {
+			switch strings.ToLower(tag) {
+			case "user", "role", "user_id", "role_id":
+				w.refuse(fl, fmt.Sprintf("field %s with json name %q that the caller sends", name, tag), "T3 user, role passed in", identityHint)
+			}
 		}
 		switch p := structTag(fl.Tag, "path"); {
 		case server != "": // T1/T2: the line says how the server sets it
@@ -356,7 +392,7 @@ func (w *walker) fields(ts *ast.TypeSpec, ctx string, limit bool) []Field {
 		case structTag(fl.Tag, "query") != "":
 			line = fmt.Sprintf(docSentences["query field"], tag, typ)
 		}
-		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, ServerSet: server, List: list, pos: w.fset.Position(fl.Pos())})
+		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, ServerSet: server, List: list, goType: types.ExprString(fl.Type), pos: w.fset.Position(fl.Pos())})
 	}
 	if limit && len(out) > MaxInputFields {
 		w.refuse(ts, fmt.Sprintf("Input with %d fields", len(out)), "hard limit", fmt.Sprintf("At most %d fields", MaxInputFields))
@@ -475,6 +511,67 @@ func (w *walker) actionStruct(ts *ast.TypeSpec) {
 		return
 	}
 	w.refuse(ts, "Action struct of a different shape", "D7 action", "Write exactly: type Action struct { q *db.Queries }")
+}
+
+// rolesDecl reads A1: var Roles = httpx.Public, or
+// var Roles = httpx.Roles("<role>", ...) with one or more distinct lowercase
+// identifiers as string literals. Every role must be one cmd/server
+// declares with httpx.AppRoles (A2).
+func (w *walker) rolesDecl(vs *ast.ValueSpec) {
+	if w.f.rolesSeen {
+		w.refuse(vs, "second Roles declaration", "A1 who may call it", "Declare Roles once")
+		return
+	}
+	w.f.rolesSeen = true
+	if len(vs.Values) != 1 || vs.Type != nil || !w.pkgs["httpx"] {
+		w.refuse(vs, "Roles declaration "+w.print(vs), "A1 who may call it", rolesHint)
+		return
+	}
+	switch v := vs.Values[0].(type) {
+	case *ast.SelectorExpr:
+		if types.ExprString(v) == "httpx.Public" {
+			w.f.Public = true
+			return
+		}
+	case *ast.CallExpr:
+		if types.ExprString(v.Fun) != "httpx.Roles" || v.Ellipsis.IsValid() {
+			break
+		}
+		if len(v.Args) == 0 {
+			w.refuse(vs, "empty role list httpx.Roles()", "A1 who may call it", "List at least one role, or declare var Roles = httpx.Public for an action anyone may call, signed in or not")
+			return
+		}
+		seen := map[string]bool{}
+		for _, a := range v.Args {
+			role, ok := stringLit(a)
+			switch {
+			case !ok:
+				w.refuse(a, "role "+types.ExprString(a)+" that is not a string literal", "A1 who may call it", rolesHint)
+			case !roleRe.MatchString(role) || len(role) > 32:
+				w.refuse(a, fmt.Sprintf("role %q that is not a lowercase identifier", role), "A1 who may call it", "A role name is [a-z][a-z0-9_]*, at most 32 characters, for example \"organizer\" or \"box_office\"")
+			case seen[role]:
+				w.refuse(a, fmt.Sprintf("role %q listed twice", role), "A1 who may call it", "List each role once")
+			case w.env.roles == nil:
+				w.refuse(a, fmt.Sprintf("role %q without an app-wide role list", role), "A2 app roles", appRolesHint)
+			case !w.env.roles.has[role]:
+				w.refuse(a, fmt.Sprintf("role %q that cmd/server does not declare", role), "A2 app roles",
+					fmt.Sprintf("The app's roles are declared once, in %s: %s. Use one of them, or add it there", w.env.roles.pos, joinOr(quoteAll(w.env.roles.list))))
+			default:
+				w.f.Roles = append(w.f.Roles, role)
+			}
+			seen[role] = true
+		}
+		return
+	}
+	w.refuse(vs, "Roles declaration "+w.print(vs), "A1 who may call it", rolesHint)
+}
+
+func quoteAll(list []string) []string {
+	out := make([]string, len(list))
+	for i, s := range list {
+		out[i] = strconv.Quote(s)
+	}
+	return out
 }
 
 func (w *walker) failureDecl(vs *ast.ValueSpec) {

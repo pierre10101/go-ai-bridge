@@ -35,7 +35,7 @@ type textSessionOut struct {
 func serveSession(t *testing.T, method, target, body string, cookies ...string) (*httptest.ResponseRecorder, bool, sessionOut) {
 	t.Helper()
 	ran := false
-	h := Bind(func(_ context.Context, in sessionIn) (sessionOut, error) {
+	h := Bind(Public, func(_ context.Context, in sessionIn) (sessionOut, error) {
 		ran = true
 		return sessionOut{Session: in.Session}, nil
 	})
@@ -92,7 +92,7 @@ func TestSessionRuleZeroWithoutAValidCookie(t *testing.T) {
 		})
 	}
 	// Another cookie name is not the session.
-	h := Bind(func(_ context.Context, in sessionIn) (sessionOut, error) { return sessionOut{Session: in.Session}, nil })
+	h := Bind(Public, func(_ context.Context, in sessionIn) (sessionOut, error) { return sessionOut{Session: in.Session}, nil })
 	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"seat_id":7}`))
 	req.AddCookie(&http.Cookie{Name: "session", Value: "42"})
 	rec := httptest.NewRecorder()
@@ -136,7 +136,7 @@ func TestSessionRuleOnGET(t *testing.T) {
 	var got getIn
 	ran := false
 	mux := http.NewServeMux()
-	mux.Handle("GET /x/{id}", Bind(func(_ context.Context, in getIn) (sessionOut, error) { ran, got = true, in; return sessionOut{}, nil }))
+	mux.Handle("GET /x/{id}", Bind(Public, func(_ context.Context, in getIn) (sessionOut, error) { ran, got = true, in; return sessionOut{}, nil }))
 	req := httptest.NewRequest(http.MethodGet, "/x/3", nil)
 	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "77"})
 	rec := httptest.NewRecorder()
@@ -162,7 +162,7 @@ func TestSessionOnlyGET(t *testing.T) {
 		Session int64 `json:"session" server:"session"`
 	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /me", Bind(func(_ context.Context, in onlyIn) (sessionOut, error) { return sessionOut{Session: in.Session}, nil }))
+	mux.Handle("GET /me", Bind(Public, func(_ context.Context, in onlyIn) (sessionOut, error) { return sessionOut{Session: in.Session}, nil }))
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "5"})
 	rec := httptest.NewRecorder()
@@ -175,7 +175,7 @@ func TestSessionOnlyGET(t *testing.T) {
 // Text sessions: "1 to 128 letters, digits, '-', '_' or '.'", else "the
 // empty text".
 func TestSessionRuleText(t *testing.T) {
-	h := Bind(func(_ context.Context, in textSessionIn) (textSessionOut, error) {
+	h := Bind(Public, func(_ context.Context, in textSessionIn) (textSessionOut, error) {
 		return textSessionOut{Session: in.Session}, nil
 	})
 	for value, want := range map[string]string{
@@ -214,11 +214,11 @@ func TestSessionRuleNamesTheCookie(t *testing.T) {
 // A server tag of another shape is a bug in the slice: HTTP 500, not run.
 func TestServerTagOfAnotherShapeIsABug(t *testing.T) {
 	type badIn struct {
-		User int64 `json:"user" server:"user"`
+		Admin int64 `json:"admin" server:"admin"`
 	}
 	ran := false
 	rec := httptest.NewRecorder()
-	Bind(func(_ context.Context, in badIn) (sessionOut, error) { ran = true; return sessionOut{}, nil }).
+	Bind(Public, func(_ context.Context, in badIn) (sessionOut, error) { ran = true; return sessionOut{}, nil }).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{}`)))
 	if rec.Code != Internal.Status || ran {
 		t.Fatalf("status %d ran=%v", rec.Code, ran)

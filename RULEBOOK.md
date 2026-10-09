@@ -29,7 +29,8 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Statements: S1-S11](#statements-s1-s11)
 - [Expressions: E1-E7](#expressions-e1-e7)
 - [SQL: Q0-Q7](#sql-q0-q7)
-- [Rules across statements: T1, T2, W1](#rules-across-statements-t1-t2-w1)
+- [Rules across statements: T1-T3, W1](#rules-across-statements-t1-t3-w1)
+- [Who may call it: A1-A3](#who-may-call-it-a1-a3)
 - [Outside the slice: M1-M3, H1](#outside-the-slice-m1-m3-h1)
 - [Conditional claim and state-transition rules](#conditional-claim-and-state-transition-rules)
 - [Hard limits](#hard-limits)
@@ -49,11 +50,11 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.2.0
+go get github.com/pierre10101/go-ai-bridge@v0.3.0
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.2.0
-bridge-en -version                      # bridge-en 0.2.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.3.0
+bridge-en -version                      # bridge-en 0.3.0
 ```
 
 Then `bridge-en init` writes `AGENTS.md` and pointer files for AI agents
@@ -63,7 +64,7 @@ into the app (documents only; see
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.2.0
+require github.com/pierre10101/go-ai-bridge v0.3.0
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -74,9 +75,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -90,22 +91,25 @@ Without GitHub Actions: `go install …@v<version>` as above, or download
 check the hash.
 
 **Why app pull requests cannot rewrite the English.** The English quotes the
-runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`, `httpx.SessionRule`, `httpx.ListRule`),
+runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`, `httpx.SessionRule`, `httpx.ListRule`, `httpx.RolesRule`, `httpx.UserRule`),
 and the app runs that same runtime: both come from the one module version in
 `go.mod`, verified by the Go checksum database. The app has no copy to edit.
 `bridge-en -check` (and `-write`) first refuse an app whose `go.mod` requires
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.2.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.2.0), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.3.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.3.0), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
-diff of every `.en` file, commit. 0.2.0 is a breaking change: every slice
-needs an `intent.md` whose `## Failure cases` section is in the strict
-format and names exactly the F-IDs of `action.go` (I1-I3); the migration
-steps are in README.md, "0.1.x to 0.2.0".
+diff of every `.en` file, commit. 0.3.0 is a breaking change: every action
+declares who may call it (`var Roles = httpx.Roles(...)` or `httpx.Public`,
+A1), the app declares its roles once in `cmd/server` (`httpx.AppRoles`, A2),
+and `cmd/server` binds each route with `httpx.Bind(<slice>.Roles, ...)`
+behind `httpx.Identify` (A3); the migration steps are in README.md, "0.2.x
+to 0.3.0". (0.2.0 was too: every slice needs an `intent.md` in the I1-I3
+format; see README.md, "0.1.x to 0.2.0".)
 
 ## App layout
 
@@ -115,8 +119,10 @@ steps are in README.md, "0.1.x to 0.2.0".
 go.mod                       any module path; requires github.com/pierre10101/go-ai-bridge (the pin)
 schema.sql / schema.go       the app's schema; schema.go embeds it for store.Open
 sqlc.yaml                    one entry per slice
-cmd/server/main.go           store.Open(ctx, path, schema), then serve Routes
-cmd/server/routes.go         one line per slice: mux.Handle(<slice>.Route, httpx.Bind(...txn.DB(db)...))
+cmd/server/main.go           store.Open(ctx, path, schema), then serve Routes(db, <the app's sign-in hook>)
+cmd/server/routes.go         var AppRoles = httpx.AppRoles(...) (A2); one line per slice:
+                             mux.Handle(<slice>.Route, httpx.Bind(<slice>.Roles, ...txn.DB(db)...)) (A3);
+                             return httpx.Identify(AppRoles, identity, mux)
 features/<slice>/            one directory per action (below)
 internal/domain/             the app's value objects and pure rules (M1-M3); may be absent
 ```
@@ -129,7 +135,7 @@ A slice:
 ```
 features/<slice>/
   intent.md          why, inputs, outputs, "## Failure cases" F1..Fn (I1-I3; write this FIRST)
-  action.go          Route, Input, Output, F-IDs, Action, New, Handle (D1-D10, S1-S11)
+  action.go          Route, Roles, Input, Output, F-IDs, Action, New, Handle (D1-D10, S1-S11, A1)
   queries/*.sql      plain SQL with sqlc annotations (Q0-Q7)
   db/                sqlc-generated code (never edited by hand)
   checks/*_test.go   one TestF<n>_... per F-ID, referencing <slice>.F<n>
@@ -140,17 +146,25 @@ features/<slice>/
 a slice whose F-IDs there differ from those of `action.go` (I3) before it
 checks anything else. Then it also cross-checks: every F-ID is covered by a
 check in `checks/`; every query in `queries/` is called (no dead SQL); the
-route is bound with the runtime's `httpx.Bind` over its `txn.DB`.
+route is bound with the runtime's `httpx.Bind`, with the slice's own `Roles`,
+over its `txn.DB` (H1, A3).
+
+Sign-in, password hashing and sessions are the app's own code, outside
+`features/` and outside bridge-en. The app gives the runtime one hook,
+`httpx.Identity` (who is signed in, with which role), installed once with
+`httpx.Identify` around all routes; see [Who may call it](#who-may-call-it-a1-a3).
 
 ## Writing a slice
 
 1. Write `intent.md` with every failure case (F1..Fn) in English **before any
    code**, in the I2 format: `- F<n>: <text>` under `## Failure cases`.
 2. Write `queries/*.sql` (Q0-Q7) and run `sqlc generate`.
-3. Write `action.go` inside D1-D10 / S1-S11.
+3. Write `action.go` inside D1-D10 / S1-S11, declaring who may call it
+   (`var Roles = httpx.Roles("<role>", ...)` or `httpx.Public`, A1).
 4. Write one check per F-ID in `checks/` (`func TestF<n>_...` that references
    `<slice>.F<n>`).
-5. Bind the route in `cmd/server/routes.go`.
+5. Bind the route in `cmd/server/routes.go` with its own Roles:
+   `httpx.Bind(<slice>.Roles, ...)` (A3).
 6. `bridge-en -check features/<slice>` after every edit; a refusal names the
    rule to follow.
 7. `bridge-en -write features/<slice>` (it refuses while I1-I3 fail); read
@@ -254,9 +268,10 @@ Refused: `package createInvoice` - `refused: package name "createInvoice" is not
 ### D2
 
 **imports** - only `context`, `net/http`,
-`github.com/pierre10101/go-ai-bridge/runtime/{assert,failure,page}`,
+`github.com/pierre10101/go-ai-bridge/runtime/{assert,failure,page,httpx}`,
 `<module>/internal/domain` and `<module>/features/<slice>/db`; no renamed,
-dot or blank imports.
+dot or blank imports. `httpx` is only for the `Roles` declaration (A1):
+`Handle` never uses it.
 
 ```go
 import (
@@ -267,11 +282,12 @@ import (
 	"example.com/app/internal/domain"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 ```
 English: none (imports decide what can be said).
 
-Refused: `import "fmt"` - `refused: import "fmt" is not in the allowed pattern list (D2 imports). Allowed: context, net/http, github.com/pierre10101/go-ai-bridge/runtime/{assert,failure,page}, <module>/internal/domain, <module>/features/hidden_magic/db`
+Refused: `import "fmt"` - `refused: import "fmt" is not in the allowed pattern list (D2 imports). Allowed: context, net/http, github.com/pierre10101/go-ai-bridge/runtime/{assert,failure,page,httpx}, <module>/internal/domain, <module>/features/hidden_magic/db`; `httpx.PublicRule` used in `Handle` - `refused: package-level value httpx.PublicRule is not in the allowed pattern list (expression)`
 
 ### D3
 
@@ -290,8 +306,10 @@ Refused: `const MaxRetries = 3` - `refused: constant declaration MaxRetries is n
 `bool`, `domain.<T>` or a list input (D10: `[]int64` or `[]string` tagged
 `list:"<min>..<max>"`), each with a json tag. Every field is required (left
 out or null is HTTP 400). Exception, the **server-set inputs**: an `int64`
-field tagged `clock:"now"` (T1) and one `int64` or `string` field tagged
-`server:"session"` (T2) are set by the server; the caller must not send them
+field tagged `clock:"now"` (T1), one `int64` or `string` field tagged
+`server:"session"` (T2), and the signed-in user `json:"user" server:"user"`
+(`int64` or `string`) and role `json:"role" server:"role"` (`string`) (T3)
+are set by the server; the caller must not send them
 (body or query string: HTTP 400), and the English lists them apart from the
 fields the caller sends. GET fields take `path:"<name>"` or `query:"<name>"`.
 
@@ -331,7 +349,8 @@ Refused: `Raw map[string]any \`json:"raw"\`` - `refused: field type map[string]a
 ### D6
 
 **failures** - `var ( F<n> = failure.New("F<n>", http.Status<Name>, "<message>") )`;
-the only package-level variables; every F-ID is raised by an S2 guard.
+the only package-level variables besides `Roles` (A1); every F-ID is raised
+by an S2 guard.
 Statuses: 400, 401, 403, 404, 409, 410, 422, 429.
 
 ```go
@@ -873,7 +892,7 @@ Refused (`adapter/testdata/bad/list_shapes`):
 
 ---
 
-## Rules across statements: T1, T2, W1
+## Rules across statements: T1-T3, W1
 
 ### T1
 
@@ -918,7 +937,8 @@ type Input struct {
 }
 ```
 
-Who the caller is comes only from this field. Never take an identity from
+Who the caller is comes only from this field (or, for a signed-in user,
+from the T3 fields). Never take an identity from
 the request body (`person_id`, `user_id`, `owner_id`): the caller can send
 any value, so a claim or a check written with it lets anyone act in someone
 else's name. A text session's guard is `if in.Session == "" { return
@@ -959,11 +979,67 @@ the body or in the query string`, and in steps it is `the session from the
 cookie`: ``1. If the session from the cookie is at most 0, stop with F1: HTTP 401 Unauthorized "session is required".``
 
 Refused:
-- `Session int64 \`json:"session" server:"user"\`` - `refused: server field Session tagged server:"user" is not in the allowed pattern list (T2 session is passed in)`
+- `Session int64 \`json:"session" server:"admin"\`` - `refused: server field Session tagged server:"admin" is not in the allowed pattern list (T2 session is passed in)`
 - `Session bool \`json:"session" server:"session"\`` - `refused: server field Session of type bool ...`
 - `Session int64 \`json:"session" query:"session" server:"session"\`` - `refused: server field Session with a path or query tag ...`
 - a `server` tag on Output - `refused: server tag on SeatID outside Input ...`
 - a second `server:"session"` field - `refused: second session field Other ...`
+
+### T3
+
+**signed-in user and role are passed in** - sign-in, password hashing and
+sessions stay in the app; bridge-en only takes **who is signed in** and
+**their role**, as server-set inputs like the time and the session. At most
+one Input field `int64` or `string` tagged `server:"user"`, named `user`,
+and at most one `string` field tagged `server:"role"`, named `role`:
+
+```go
+type Input struct {
+	Title    string `json:"title"`
+	StartsAt int64  `json:"starts_at"`
+	User     int64  `json:"user" server:"user"`
+	Role     string `json:"role" server:"role"`
+	Now      int64  `json:"now" clock:"now"`
+}
+```
+
+`httpx.Bind` (`runtime/httpx`) fills them from the app's sign-in hook
+(`httpx.Identity`, installed with `httpx.Identify`, A3), never from the
+request:
+
+- signed in (the hook says so, the user id is 1 to 128 letters, digits,
+  `-`, `_` or `.` (a whole number from 1 up for an `int64` field) and the
+  role is one of the app's `httpx.AppRoles`, A2): the user's id and role;
+- otherwise nobody is signed in: an action declared with `Roles` (A1) never
+  runs (HTTP 401), and a `Public` one gets 0 (or the empty text) and the
+  empty text;
+- a request whose body or query string sends `user` or `role`, in any letter
+  case, is answered with HTTP 400 `bad_request` and the action does not run.
+
+Who the caller is comes only from these fields (or the T2 session). An
+Input field the caller sends may not be named `user`, `role`, `user_id` or
+`role_id`; a field about someone else takes another name (`member_id`).
+Checks call `Handle` with any user and role they like.
+
+English (`adapter/testdata/good/create_event/create_event.en`, quoting
+`httpx.UserRule` and `httpx.RoleRule`), apart from the fields the caller
+sends:
+```
+The action also takes these 3 values, which the caller does not send:
+- `user`: set by the server: the signed-in user (from the app's sign-in session); the caller does not send it, and a request that does is answered with HTTP 400 below.
+- `role`: set by the server: the signed-in user's role (from the app's sign-in session); the caller does not send it, and a request that does is answered with HTTP 400 below.
+```
+For a `Public` action (`adapter/testdata/good/my_events/my_events.en`,
+`httpx.SignedOutRule`): `` `user`: set by the server: the signed-in user
+(from the app's sign-in session), or 0 when the caller is not signed in; ...``
+In steps they are `the signed-in user` and `the signed-in user's role`:
+``3. Write: add one event to table `events` with `organizer_id` = the signed-in user, `created_as` = the signed-in user's role, ...``
+
+Refused:
+- `UserID int64 \`json:"user_id"\``, `Role string \`json:"role"\`` (`adapter/testdata/bad/identity_from_body`) -
+  `refused: field UserID with json name "user_id" that the caller sends is not in the allowed pattern list (T3 user, role passed in). Who the caller is never comes from the request. The server sets who the caller is: User int64 \`json:"user" server:"user"\` (or string) is the signed-in user and Role string \`json:"role" server:"role"\` their role; httpx.Bind fills both from the app's sign-in hook (httpx.Identify), and a request that sends them is HTTP 400. A field about someone else takes another name (for example member_id)`
+- `User int64 \`json:"owner" server:"user"\`` - `refused: server:"user" field User with json name "owner" is not in the allowed pattern list (T3 user, role passed in). Its json name is "user", ...`
+- `Role int64 \`json:"role" server:"role"\`` - `refused: server field Role of type int64 ...`; a path or query tag - `refused: server field User with a path or query tag ...`; a second `server:"user"` field - `refused: second user field Other ...`; on Output - `refused: server tag on CreatedAs outside Input ...` (`TestRolesRefusals`)
 
 ### W1
 
@@ -991,6 +1067,122 @@ if claimed == 0 && holder.HeldBy == in.Session {   // holder read after the clai
 }
 ```
 English: ``If no seat was changed in step 2 and the found seat's `held_by` equals the session from the cookie, stop with F2 ...``
+
+---
+
+## Who may call it: A1-A3
+
+Every action says who may call it, and the runtime enforces it **before**
+`Handle` runs. There is no default: an action that says nothing is refused
+(deny by default). Sign-in itself (passwords, sessions) is the app's; the
+app tells the runtime who is signed in through one hook.
+
+### A1
+
+**who may call it** - `action.go` declares, once, at the top level:
+
+```go
+var Roles = httpx.Roles("organizer", "admin") // signed-in users with one of these roles
+```
+or
+```go
+var Roles = httpx.Public // anyone, signed in or not
+```
+
+Roles are one or more distinct lowercase identifiers (`[a-z][a-z0-9_]*`, at
+most 32 characters) given as string literals, each declared app-wide (A2).
+
+English (quoting `httpx.RolesRule`, `adapter/testdata/good/create_event/create_event.en`),
+right under the route, and the two answers in the contract:
+```
+Who may call it: signed-in users with role `organizer` or `admin`. Anyone else is answered with HTTP 403 (HTTP 401 if not signed in), and the action does not run: the server checks this before it reads the request.
+...
+- HTTP 401 Unauthorized, id "unauthorized", message "sign-in required", if the caller is not signed in. The action does not run.
+- HTTP 403 Forbidden, id "forbidden", message "not allowed for this role", if the caller is signed in with a role not listed above. The action does not run.
+```
+or (`httpx.PublicRule`, `adapter/testdata/good/my_events/my_events.en`):
+```
+Who may call it: anyone, signed in or not.
+```
+
+Refused:
+- no declaration (`adapter/testdata/bad/roles_missing`) -
+  `testdata/bad/roles_missing/action.go:2:9: refused: action.go without a Roles declaration is not in the allowed pattern list (A1 who may call it). Every action declares who may call it, once, at the top level of action.go: var Roles = httpx.Roles("<role>", ...) (signed-in users with one of these roles; lowercase identifiers declared app-wide with httpx.AppRoles in cmd/server) or var Roles = httpx.Public (anyone, signed in or not); import github.com/pierre10101/go-ai-bridge/runtime/httpx for it`
+- `httpx.Roles()` (`adapter/testdata/bad/roles_empty`) -
+  `testdata/bad/roles_empty/action.go:16:5: refused: empty role list httpx.Roles() is not in the allowed pattern list (A1 who may call it). List at least one role, or declare var Roles = httpx.Public for an action anyone may call, signed in or not`
+- other forms (`TestRolesRefusals`): `var Roles = []string{"admin"}`, a typed
+  `var Roles httpx.Access = ...`, `httpx.Roles(names...)` - `refused: Roles declaration ... (A1 who may call it)`;
+  `httpx.Roles("Admin")` - `refused: role "Admin" that is not a lowercase identifier ...`;
+  `httpx.Roles(Route)` - `refused: role Route that is not a string literal ...`;
+  `httpx.Roles("admin", "admin")` - `refused: role "admin" listed twice ...`;
+  a second `Roles` - `refused: second Roles declaration ...`
+
+### A2
+
+**app roles** - the app declares every role a signed-in user can have,
+once, in `cmd/server`, and hands it to `httpx.Identify` (A3):
+
+```go
+var AppRoles = httpx.AppRoles("customer", "organizer", "finance", "admin")
+```
+
+`bridge-en` reads that call (string literals, distinct lowercase
+identifiers) and refuses an action that lists any other role, so a typo
+(`"organiser"`) fails `-check` instead of locking everyone out. An app with
+only `Public` actions needs no `AppRoles`. At runtime a role the sign-in
+hook returns that `AppRoles` does not declare counts as not signed in.
+
+Why app-wide: the role names are the one place where a typo is silent (a
+misspelt role in `Roles` would answer 403 to every real user and pass
+every check that uses the same misspelling). One list, read by bridge-en
+and enforced by `httpx.Identify`, catches it at `-check` and costs one line.
+
+Refused:
+- an unknown role (`adapter/testdata/bad/roles_unknown`) -
+  `testdata/bad/roles_unknown/action.go:16:25: refused: role "organiser" that cmd/server does not declare is not in the allowed pattern list (A2 app roles). The app's roles are declared once, in cmd/server/routes.go:27:16: "customer", "organizer", "finance" or "admin". Use one of them, or add it there`
+- a role list in an app without `AppRoles` - `refused: role "admin" without an app-wide role list is not in the allowed pattern list (A2 app roles). Declare the app's roles once in cmd/server: var AppRoles = httpx.AppRoles("<role>", ...), and pass it to httpx.Identify`
+- in `cmd/server` (`TestAppRoles`): `httpx.AppRoles()` - `refused: httpx.AppRoles without roles ...`; `"Admin"` - `refused: app role "Admin" that is not a lowercase identifier ...`; a role twice - `refused: app role "admin" listed twice ...`; a second call - `refused: second httpx.AppRoles call (the first is at cmd/server/routes.go:5:16) ...`
+
+### A3
+
+**enforced before Handle** - `cmd/server` binds every route with the
+slice's own `Roles`, and serves the mux through the app's sign-in hook:
+
+```go
+// The app's hook: who is signed in, with which role. Its sessions and
+// password hashing are the app's own code; bridge-en never sees them.
+func signedIn(r *http.Request) (user, role string, ok bool) { ... }
+
+func Routes(db *sql.DB, identity httpx.Identity) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle(create_event.Route, httpx.Bind(create_event.Roles, create_event.New(eventdb.New(txn.DB(db))).Handle))
+	...
+	return httpx.Identify(AppRoles, identity, mux) // main: Routes(db, signedIn)
+}
+```
+
+`httpx.Identify` calls the hook once per request and remembers the
+signed-in user for `httpx.Bind` (a request cannot set it). `httpx.Bind`
+then, **before it reads the request**:
+
+- an action declared with `Roles` and nobody signed in: HTTP 401
+  `httpx.Unauthenticated` (`unauthorized`, "sign-in required");
+- signed in with a role the action does not list: HTTP 403
+  `httpx.Forbidden` (`forbidden`, "not allowed for this role");
+- in both cases `Handle` does not run, no transaction begins and nothing is
+  written; the body is not even decoded (a bad body still gets 401/403).
+
+Deny by default at runtime too: without `httpx.Identify` (or with a nil
+hook) nobody is signed in, and the zero `httpx.Access` lets nobody in.
+`runtime/httpx` `TestRolesRule`, `TestZeroAccessDeniesEveryone`,
+`TestPublicRule` and `TestUserAndRoleAreNeverSent` prove each sentence; the
+create_event, create_invoice and list_customer_invoices checks prove 401,
+403 and the allowed roles over HTTP against SQLite, with nothing written on
+401/403.
+
+Refused: a route bound without its own Roles (`httpx.Bind(handle)`,
+`httpx.Bind(httpx.Public, ...)`, another slice's Roles) -
+`cmd/server: create_event.Route is not served with github.com/pierre10101/go-ai-bridge/runtime/httpx.Bind(create_event.Roles, ...) over queries built on github.com/pierre10101/go-ai-bridge/runtime/txn.DB (H1, A3); ...` (`TestBoundNeedsTxn`)
 
 ---
 
@@ -1051,16 +1243,18 @@ Refused: `seq+1` - `refused: arithmetic operator + is not in the allowed pattern
 `BadInput`, `Internal`, `SuccessStatus`, `InputRule`, `QueryInputRule`,
 `BadQueryWhen`, `TxRule`, `ReadTxRule`, `ClockRule`, `SessionCookie`,
 `SessionRule`, `SessionValue`, `ServerSetWhen`, `ListRule`, `ListRuleExact`,
-`ListElems`, `ListWhen` and `ErrorBody`;
+`ListElems`, `ListWhen`, `PublicRule`, `RolesRule`, `Unauthenticated`,
+`Forbidden`, `UserRule`, `RoleRule`, `SignedOutRule`, `SignedOutZero` and
+`ErrorBody`;
 `bridge-en` quotes the values compiled into it, which are the app's because
 `go.mod` pins the same version (the pin check above), and httpx's own tests
 prove each one. `cmd/server` binds every route with the runtime's
-`httpx.Bind` over queries built on its `txn.DB`: one transaction per call
+`httpx.Bind(<slice>.Roles, ...)` (A3) over queries built on its `txn.DB`: one transaction per call
 (`BEGIN IMMEDIATE` at the first query for writes, read-only for GET).
 
 English: `Steps 3 to 7 run in one database transaction. It begins with the query in step 3 and holds the database's write lock until it ends, ...`
 
-Refused: a route bound over a plain `*sql.DB`, or with an app's own `httpx` - `cmd/server: create_invoice.Route is not served with github.com/pierre10101/go-ai-bridge/runtime/httpx.Bind over queries built on github.com/pierre10101/go-ai-bridge/runtime/txn.DB; ...`
+Refused: a route bound over a plain `*sql.DB`, or with an app's own `httpx` - `cmd/server: create_invoice.Route is not served with github.com/pierre10101/go-ai-bridge/runtime/httpx.Bind(create_invoice.Roles, ...) over queries built on github.com/pierre10101/go-ai-bridge/runtime/txn.DB (H1, A3); ...`
 
 ---
 
@@ -1071,10 +1265,11 @@ condition holds at that moment: claiming a resource, confirming or releasing
 a hold, approving a request, consuming a one-time token. The seat hold in
 `adapter/testdata/good/claim_example` is only an example.
 
-1. **Pass the current time and the session in** (T1, T2). No clock inside
-   logic, and the caller never names who they are in the body: the holder or
-   owner written by a claim is `in.Session` (`server:"session"`), never a
-   `person_id` or `user_id` input. Store when a hold ends (`SET expires_at =
+1. **Pass the current time and the session (or signed-in user) in** (T1,
+   T2, T3). No clock inside logic, and the caller never names who they are
+   in the body: the holder or owner written by a claim is `in.Session`
+   (`server:"session"`) or `in.User` (`server:"user"`), never a `person_id`
+   or `user_id` input. Store when a hold ends (`SET expires_at =
    sqlc.arg(now) + 600`) and compare that column with the server-set `now`;
    the English names the boundary exactly (Q6 table): `expires_at <=
    sqlc.arg(now)` is "`expires_at` is no later than the current time", so a
@@ -1144,7 +1339,7 @@ writes documents only, never code, into the directory:
 
 | File | For | Content |
 |---|---|---|
-| `AGENTS.md` | every agent (the cross-tool standard) and people | the workflow: install by the go.mod pin, intent first, `-check` after every edit, `-write` and read the `.en` against the intent, never edit `.en`, the server's time and session passed in, claims, a thin UI, countdowns from the server's `now`/`expires_at`, errors on `error.id`, pull requests only, and an example feature |
+| `AGENTS.md` | every agent (the cross-tool standard) and people | the workflow: install by the go.mod pin, intent first, `-check` after every edit, `-write` and read the `.en` against the intent, never edit `.en`, the server's time, session and signed-in user and role passed in, every action's required `Roles` declaration, claims, a thin UI, countdowns from the server's `now`/`expires_at`, errors on `error.id`, pull requests only, and an example feature |
 | `.cursor/rules/bridge-en.mdc` | Cursor (`alwaysApply: true`) | "follow AGENTS.md" and the five rules that matter most |
 | `CLAUDE.md` | Claude Code | the same pointer |
 | `.github/copilot-instructions.md` | GitHub Copilot | the same pointer |
@@ -1186,8 +1381,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.2.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.3.0
         # with:
         #   features: "features/*/"   # default
         #   max-chars: "60000"        # default

@@ -11,6 +11,7 @@ import (
 	"example.com/fixtures/features/claim_many_checks/db"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 const Route = "POST /tickets/confirm"
@@ -56,3 +57,6 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	assert.Post(out.Confirmed == confirmed, "every ticket is confirmed")
 	return out, nil
 }
+
+// Roles: anyone may call it (A1); this fixture is about another rule.
+var Roles = httpx.Public

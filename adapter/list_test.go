@@ -43,9 +43,9 @@ func mutate(t *testing.T, fixture string, edits ...[3]string) (string, error) {
 func TestStrictClaimCheck(t *testing.T) {
 	const check = "\tif claimed != 1 {\n\t\treturn Output{}, F1\n\t}\n"
 	refused := map[string]struct{ to, want string }{
-		"and":       {"\tif claimed == 0 && claimed != 1 {\n\t\treturn Output{}, F1\n\t}\n", "action.go:46:2: refused: claim whose changed-row count is checked only inside a compound condition (line 54) is not in the allowed pattern list (S10 claim check). The check is a guard of its own whose entire condition is claimed != 1"},
-		"or":        {"\tif claimed != 1 || in.Session == 0 {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 54)"},
-		"nested":    {"\tif in.Session > 0 && (claimed != 1 || in.SeatID == 0) {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 54)"},
+		"and":       {"\tif claimed == 0 && claimed != 1 {\n\t\treturn Output{}, F1\n\t}\n", "action.go:51:2: refused: claim whose changed-row count is checked only inside a compound condition (line 59) is not in the allowed pattern list (S10 claim check). The check is a guard of its own whose entire condition is claimed != 1"},
+		"or":        {"\tif claimed != 1 || in.Session == 0 {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 59)"},
+		"nested":    {"\tif in.Session > 0 && (claimed != 1 || in.SeatID == 0) {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 59)"},
 		"negated":   {"\tif !(claimed == 1) {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check)"},
 		"two":       {"\tif claimed != 2 {\n\t\treturn Output{}, F1\n\t}\n", "refused: comparison claimed != 2 on a claim's changed-row count"},
 		"in a post": {"\tassert.Pre(true, \"x\")\n", "refused: claim whose changed-row count no guard checks"},
@@ -92,7 +92,7 @@ func TestMultiRowClaimRules(t *testing.T) {
 		"reversed":          {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "int64(len(in.TicketIDs)) != confirmed"}, "refused: call to int64 is not in the allowed pattern list (expression)"},
 		"equals":            {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed == int64(len(in.TicketIDs))"}, "refused: comparison confirmed == int64(len(in.TicketIDs)) on a claim's changed-row count is not in the allowed pattern list (S11 multi-row claim check)"},
 		"no conversion":     {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed != len(in.TicketIDs)"}, "refused: comparison confirmed != len(in.TicketIDs) on a multi-row claim's changed-row count"},
-		"compound":          {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed != int64(len(in.TicketIDs)) || held != 0"}, "refused: claim whose changed-row count is checked only inside a compound condition (line 60) is not in the allowed pattern list (S11 multi-row claim check)"},
+		"compound":          {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed != int64(len(in.TicketIDs)) || held != 0"}, "refused: claim whose changed-row count is checked only inside a compound condition (line 65) is not in the allowed pattern list (S11 multi-row claim check)"},
 		"len elsewhere":     {[3]string{"", "Output{Confirmed: confirmed}", "Output{Confirmed: int64(len(in.TicketIDs))}"}, "refused: call to int64 is not in the allowed pattern list (expression)"},
 		"list as a value":   {[3]string{"", "\tif held != 0 {", "\tif in.TicketIDs == nil {\n\t\treturn Output{}, F2\n\t}\n\tif held != 0 {"}, "refused: list input in.TicketIDs used as a value is not in the allowed pattern list (D10 list input)"},
 		"scalar for slice":  {[3]string{"", "Now: in.Now, Ids: in.TicketIDs}", "Now: in.Now, Ids: in.Now}"}, "refused: value in.Now for IN (sqlc.slice(ids)) that is not a list input is not in the allowed pattern list (Q7 IN list)"},

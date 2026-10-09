@@ -24,6 +24,9 @@ func main() {
 	}
 	defer db.Close()
 
+	// The fixture app has no sign-in of its own, so its hook is nil: nobody
+	// is signed in and only Public routes answer. A real app passes its
+	// own hook (its session cookie, looked up in its store).
 	log.Printf("listening on %s", *addr)
-	log.Fatal(http.ListenAndServe(*addr, Routes(db)))
+	log.Fatal(http.ListenAndServe(*addr, Routes(db, nil)))
 }

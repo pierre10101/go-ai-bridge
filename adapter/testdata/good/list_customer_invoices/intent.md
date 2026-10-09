@@ -6,7 +6,9 @@ time, so they can quote invoice numbers on the phone without loading every
 row at once.
 
 ## Who
-An authenticated finance user (auth is out of scope for this example).
+Signed-in users with role `finance` or `admin` (signing in is the app's,
+out of scope here). Anyone else is refused before the action runs: HTTP 401
+when not signed in, HTTP 403 for any other role.
 
 ## Inputs
 - `customer_id` — path `{id}`; the customer whose invoices to list (must exist).

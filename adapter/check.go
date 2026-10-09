@@ -25,8 +25,8 @@ var (
 // declares exactly the F-IDs intent.md lists (I3). Only then: compare with the
 // committed golden .en file and enforce the other cross-checks: every F-ID is
 // covered by checks/ (named TestF<n>_ AND referencing <pkg>.F<n>), no dead
-// SQL, and the route is served through httpx.Bind over txn.DB (whose
-// behaviour the English describes).
+// SQL, and the route is served through httpx.Bind with the slice's own
+// Roles over txn.DB (whose behaviour the English describes).
 func Check(dir string) error {
 	intent, err := ParseIntent(dir)
 	if err != nil {
@@ -166,8 +166,9 @@ func checkBound(root, pkg string) error {
 			if !ok || len(call.Args) != 2 || exprString(call.Args[0]) != alias+".Route" {
 				return true
 			}
-			if bind, ok := call.Args[1].(*ast.CallExpr); ok && exprString(bind.Fun) == httpx+".Bind" {
-				ast.Inspect(bind, func(n ast.Node) bool {
+			if bind, ok := call.Args[1].(*ast.CallExpr); ok && exprString(bind.Fun) == httpx+".Bind" &&
+				len(bind.Args) == 2 && exprString(bind.Args[0]) == alias+".Roles" { // A3: the slice's own Roles
+				ast.Inspect(bind.Args[1], func(n ast.Node) bool {
 					if c, ok := n.(*ast.CallExpr); ok && exprString(c.Fun) == txn+".DB" {
 						found = true
 					}
@@ -180,8 +181,8 @@ func checkBound(root, pkg string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%s: %s.Route is not served with %s/httpx.Bind over queries built on %s/txn.DB; the English describes that runtime's behaviour and one transaction per call, so every route goes through both",
-		filepath.Join(root, "cmd", "server"), pkg, RuntimePath, RuntimePath)
+	return fmt.Errorf("%s: %s.Route is not served with %s/httpx.Bind(%s.Roles, ...) over queries built on %s/txn.DB (H1, A3); the English describes that runtime's behaviour, one transaction per call and who may call the action, so every route goes through Bind with its own Roles: mux.Handle(%s.Route, httpx.Bind(%s.Roles, %s.New(db.New(txn.DB(conn))).Handle))",
+		filepath.Join(root, "cmd", "server"), pkg, RuntimePath, pkg, RuntimePath, pkg, pkg, pkg)
 }
 
 // importName is the name a file uses for the package at path, or "".

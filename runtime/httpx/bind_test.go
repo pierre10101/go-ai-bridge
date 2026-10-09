@@ -40,7 +40,7 @@ func serve(t *testing.T, method, body string, handle func(context.Context, in) (
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	rec := httptest.NewRecorder()
-	Bind(handle).ServeHTTP(rec, httptest.NewRequest(method, "/x", strings.NewReader(body)))
+	Bind(Public, handle).ServeHTTP(rec, httptest.NewRequest(method, "/x", strings.NewReader(body)))
 	var eb ErrorBody
 	_ = json.Unmarshal(rec.Body.Bytes(), &eb)
 	return rec, eb, logs.String()
@@ -117,7 +117,7 @@ func TestInputRuleNested(t *testing.T) {
 		`{"total":{"cents":5,"Currency":"X"}}`: `json: unknown field "total.Currency" (field names are case-sensitive)`,
 	} {
 		rec := httptest.NewRecorder()
-		Bind(func(context.Context, withMoney) (out, error) { return out{}, nil }).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
+		Bind(Public, func(context.Context, withMoney) (out, error) { return out{}, nil }).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
 		var eb ErrorBody
 		_ = json.Unmarshal(rec.Body.Bytes(), &eb)
 		if rec.Code != http.StatusBadRequest || eb.Error.Message != want {
@@ -180,7 +180,7 @@ type listIn struct {
 func TestGETPathQueryDefaults(t *testing.T) {
 	mux := http.NewServeMux()
 	var got listIn
-	mux.Handle("GET /customers/{id}/invoices", Bind(func(_ context.Context, in listIn) (out, error) {
+	mux.Handle("GET /customers/{id}/invoices", Bind(Public, func(_ context.Context, in listIn) (out, error) {
 		got = in
 		return out{OK: true}, nil
 	}))
@@ -196,7 +196,7 @@ func TestGETPathQueryDefaults(t *testing.T) {
 
 func TestGETBadLimitIs400(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.Handle("GET /customers/{id}/invoices", Bind(func(_ context.Context, in listIn) (out, error) {
+	mux.Handle("GET /customers/{id}/invoices", Bind(Public, func(_ context.Context, in listIn) (out, error) {
 		return out{OK: true}, nil
 	}))
 	rec := httptest.NewRecorder()

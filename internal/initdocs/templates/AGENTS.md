@@ -37,14 +37,23 @@ copy bridge-en code into the app.
    ```
 2. `features/<slice>/queries/*.sql` in the SQL shapes (Q0-Q7), then
    `sqlc generate`.
-3. `features/<slice>/action.go` in the grammar (D1-D10, S1-S11, E1-E7). The F-IDs
-   it declares are exactly those of intent.md.
+3. `features/<slice>/action.go` in the grammar (D1-D10, S1-S11, E1-E7, T1-T3,
+   A1-A3). The F-IDs it declares are exactly those of intent.md. It declares
+   who may call it (A1, required): `var Roles = httpx.Roles("organizer",
+   "admin")` for signed-in users with one of those roles (each role one of the
+   app's, declared once in `cmd/server` with `httpx.AppRoles`), or
+   `var Roles = httpx.Public` for anyone, signed in or not. There is no
+   default: `-check` refuses an action without it.
 4. `features/<slice>/checks/*_test.go`: one `func TestF<n>_...` per F-ID that
    references `<slice>.F<n>` and runs the action against real SQLite
    (`store.Open(ctx, ":memory:", schema)`), proving the failure fires and
    writes nothing. Test both sides of every time boundary.
-5. One line in `cmd/server/routes.go`:
-   `mux.Handle(<slice>.Route, httpx.Bind(<slice>.New(db.New(txn.DB(conn))).Handle))`.
+5. One line in `cmd/server/routes.go`, passing the slice's own Roles:
+   `mux.Handle(<slice>.Route, httpx.Bind(<slice>.Roles, <slice>.New(db.New(txn.DB(conn))).Handle))`.
+   `Routes` returns `httpx.Identify(AppRoles, identity, mux)`, where
+   `identity` is the app's sign-in hook. Sign-in, password hashing and
+   sessions are the app's own code (outside `features/`); the hook only
+   tells the runtime who is signed in and with which role.
 
 ## 3. Check after every edit
 
@@ -64,10 +73,16 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
 
 - **Server state is passed in, never read.** The current time is an Input
   field ``Now int64 `json:"now" clock:"now"` ``; the caller's session is
-  ``Session string `json:"session" server:"session"` `` (or int64). Who the
-  caller is comes only from that session, never from the request body (no
-  `person_id` or `user_id` input). Never call `time.Now()` or read a cookie
-  in a feature.
+  ``Session string `json:"session" server:"session"` `` (or int64); the
+  signed-in user is ``User int64 `json:"user" server:"user"` `` (or string)
+  and their role ``Role string `json:"role" server:"role"` ``. Who the caller
+  is comes only from these, never from the request body (no `person_id`,
+  `user_id` or `role` input: a request that sends `user` or `role` gets
+  HTTP 400). Never call `time.Now()` or read a cookie in a feature.
+- **Every action declares who may call it.** `var Roles =
+  httpx.Roles("<role>", ...)` or `var Roles = httpx.Public`; the runtime
+  answers 401 (not signed in) or 403 (role not listed) before the action
+  runs. Never check a role inside `Handle` instead.
 - **Claims are one conditional UPDATE.** Check and write in one statement
   (`UPDATE ... WHERE id = ? AND <condition>`, `:execrows`), then stop unless
   exactly one row changed: `if n != 1 { return Output{}, F<n> }`. For a list,
@@ -134,9 +149,13 @@ import (
 	"example.com/app/features/hold_seat/db"
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"
 	"github.com/pierre10101/go-ai-bridge/runtime/failure"
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 const Route = "POST /holds"
+
+// Anyone may hold a seat, signed in or not: the holder is the session.
+var Roles = httpx.Public
 
 type Input struct {
 	SeatID  int64  `json:"seat_id"`
@@ -174,6 +193,18 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	out := Output{SeatID: in.SeatID, Now: in.Now}
 	assert.Post(out.Now == in.Now, "the answer carries the server's clock")
 	return out, nil
+}
+```
+
+An action only some users may call declares their roles and takes the
+signed-in user from the server, for example:
+
+```go
+var Roles = httpx.Roles("organizer", "admin")
+
+type Input struct {
+	Title string `json:"title"`
+	User  int64  `json:"user" server:"user"` // the signed-in user, never from the body
 }
 ```
 
