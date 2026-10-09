@@ -43,7 +43,7 @@ Steps 3 to 5 run in one database transaction. It begins with the query in step 3
 
 1. If the request's `title` equals the text "", stop with F1: HTTP 422 Unprocessable Entity "title is required".
 2. If the request's `starts_at` is no later than the current time, stop with F2: HTTP 422 Unprocessable Entity "the event must start later than now".
-3. Write: add one event to table `events` with `organizer_id` = the signed-in user, `created_as` = the signed-in user's role, `title` = the request's `title` and `starts_at` = the request's `starts_at` (query `InsertEvent` in queries/insert_event.sql). Call the stored row the new event. If the query fails (for example a rule in schema.sql rejects the row), stop with HTTP 500 Internal Server Error.
+3. Write: add one event to table `events` with `organizer_id` = the signed-in user, `created_as` = the signed-in user's role, `title` = the request's `title` and `starts_at` = the request's `starts_at` (query `InsertEvent` in queries/insert_event.sql). Call the stored row the new event. Ownership: the new event is yours (`organizer_id` is the signed-in user). If the query fails (for example a rule in schema.sql rejects the row), stop with HTTP 500 Internal Server Error.
 4. Build the answer:
    - `event_id` = the new event's `id`
    - `organizer_id` = the new event's `organizer_id`

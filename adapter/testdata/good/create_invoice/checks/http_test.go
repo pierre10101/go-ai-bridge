@@ -26,7 +26,7 @@ func serveOn(conn *sql.DB, body string) *httptest.ResponseRecorder {
 }
 
 // appRoles is the list cmd/server/routes.go declares (AppRoles).
-var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin")
+var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin").BypassOwnership("admin")
 
 // serveAs wires the slice exactly like cmd/server/routes.go, with a sign-in
 // hook that says the caller is user 5 in role ("" = not signed in).

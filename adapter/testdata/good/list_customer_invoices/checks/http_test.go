@@ -27,7 +27,7 @@ func serveListOn(conn *sql.DB, path string) *httptest.ResponseRecorder {
 }
 
 // appRoles is the list cmd/server/routes.go declares (AppRoles).
-var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin")
+var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin").BypassOwnership("admin")
 
 // serveListAs wires the slice exactly like cmd/server/routes.go, with a
 // sign-in hook that says the caller is user 5 in role ("" = not signed in).
@@ -114,5 +114,30 @@ func TestHTTPBadQueryParamIs400(t *testing.T) {
 	rec := serveList(t, "/customers/1/invoices?limit=abc")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// G10 over HTTP against SQLite: a query parameter the action does not
+// declare (`limit` and `after` are its only ones), also `Limit` in another
+// letter case or the path's `id`, is answered with HTTP 400 bad_request and
+// the action does not run; the declared ones still answer 200.
+func TestHTTPUnknownQueryParameterIs400(t *testing.T) {
+	_, conn := newAction(t)
+	seedInvoices(t, conn, 3)
+	for _, path := range []string{
+		"/customers/1/invoices?debug=1",
+		"/customers/1/invoices?limit=2&offset=1",
+		"/customers/1/invoices?Limit=2",
+		"/customers/1/invoices?id=2",
+		"/customers/1/invoices?customer_id=2",
+	} {
+		rec := serveListOn(conn, path)
+		var body httpx.ErrorBody
+		if json.Unmarshal(rec.Body.Bytes(), &body) != nil || rec.Code != httpx.BadInput.Status || body.Error.ID != httpx.BadInput.ID {
+			t.Errorf("%s: status %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if rec := serveListOn(conn, "/customers/1/invoices?limit=2&after=3"); rec.Code != http.StatusOK {
+		t.Fatalf("declared parameters: status %d %s", rec.Code, rec.Body)
 	}
 }

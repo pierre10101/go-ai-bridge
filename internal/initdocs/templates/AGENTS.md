@@ -36,9 +36,11 @@ copy bridge-en code into the app.
      indented by two spaces>
    ```
 2. `features/<slice>/queries/*.sql` in the SQL shapes (Q0-Q7), then
-   `sqlc generate`.
+   `sqlc generate`. A table whose rows belong to a user says so in
+   `schema.sql`, on the comment line right above its `CREATE TABLE`:
+   `-- owner: organizer_id` (A4).
 3. `features/<slice>/action.go` in the grammar (D1-D10, S1-S11, E1-E7, T1-T3,
-   A1-A3). The F-IDs it declares are exactly those of intent.md. It declares
+   A1-A4, G10). The F-IDs it declares are exactly those of intent.md. It declares
    who may call it (A1, required): `var Roles = httpx.Roles("organizer",
    "admin")` for signed-in users with one of those roles (each role one of the
    app's, declared once in `cmd/server` with `httpx.AppRoles`), or
@@ -83,6 +85,21 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
   httpx.Roles("<role>", ...)` or `var Roles = httpx.Public`; the runtime
   answers 401 (not signed in) or 403 (role not listed) before the action
   runs. Never check a role inside `Handle` instead.
+- **Owned rows are written only in their owner's name (A4).** For a table
+  declared `-- owner: organizer_id` in `schema.sql`, an action that a
+  non-admin role may call limits every write to the signed-in user's rows:
+  `UPDATE events SET title = sqlc.arg(title) WHERE id = sqlc.arg(id) AND
+  organizer_id = sqlc.arg(organizer_id)` with `OrganizerID: in.User`, and an
+  INSERT sets `organizer_id` to `in.User`; never a request field, and a
+  Public action never writes it. The English then says "only events you own
+  (`organizer_id` is the signed-in user)". Roles that may change anyone's
+  rows are marked once in `cmd/server`:
+  `var AppRoles = httpx.AppRoles("customer", "organizer", "admin").BypassOwnership("admin")`;
+  only an action whose Roles are all such roles may skip the filter.
+- **A GET takes only the query values it declares (G10).** Any other query
+  parameter (also another letter case, or a cache-buster like `?_=123`) is
+  answered with HTTP 400, like an unknown body field. The UI sends exactly
+  the declared `query:"..."` values.
 - **Claims are one conditional UPDATE.** Check and write in one statement
   (`UPDATE ... WHERE id = ? AND <condition>`, `:execrows`), then stop unless
   exactly one row changed: `if n != 1 { return Output{}, F<n> }`. For a list,

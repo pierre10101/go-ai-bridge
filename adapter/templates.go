@@ -117,6 +117,13 @@ var exprTemplates = map[string]string{
 	"changed one":     "exactly one %s was changed in step %d",
 	"changed not one": "not exactly one %s was changed in step %d",
 	"changed value":   "the number of %s changed in step %d",
+	// A4 ownership: what a step on an owned table says (see owner.go).
+	"owned update":   "Ownership: only %s you own (`%s` is the signed-in user) can be changed by this step.",
+	"owned insert":   "Ownership: the new %s is yours (`%s` is the signed-in user).",
+	"owned read":     "Ownership: only %s you own (`%s` is the signed-in user) are read.",
+	"unowned read":   "Ownership: this read is not limited to %s you own (`%s` is not compared with the signed-in user).",
+	"bypass write":   "Ownership: this step is not limited to %s you own (`%s` need not be the signed-in user), because only role %s may call this action and cmd/server declares that it bypasses ownership.",
+	"bypass write n": "Ownership: this step is not limited to %s you own (`%s` need not be the signed-in user), because only roles %s may call this action and cmd/server declares that they bypass ownership.",
 	// S11: a claim over a Q7 IN list against the length of its list.
 	"changed not len": "the number of %s changed in step %d is not the number of %s in %s",
 }

@@ -19,6 +19,13 @@ compare the two: what was asked, and what was built.
   `httpx.Public`); the runtime refuses anyone else with 401 or 403 before the
   action runs. Sign-in, passwords and sessions stay in your app; it tells the
   runtime who is signed in through one hook (`httpx.Identify`).
+- A table whose rows belong to a user says so in `schema.sql`
+  (`-- owner: organizer_id`); `-check` then refuses any write to it that is
+  not limited to the signed-in user's rows, unless only roles the app marks
+  as bypassing ownership (`httpx.AppRoles(...).BypassOwnership("admin")`)
+  may call the action. The English says "only events you own".
+- Requests are strict: a body field or a GET query parameter the action
+  does not declare is answered with HTTP 400.
 - [RULEBOOK.md](RULEBOOK.md) is the reference: every rule with an example, its
   English and a refused example. `bridge-en -grammar` prints the rule list.
 - One Go module, `github.com/pierre10101/go-ai-bridge`: the `bridge-en`
@@ -40,10 +47,10 @@ same version (`-check` refuses any other).
 ```sh
 mkdir seat-app && cd seat-app && git init -q
 go mod init example.com/seat-app
-go get github.com/pierre10101/go-ai-bridge@v0.3.0
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.3.0
+go get github.com/pierre10101/go-ai-bridge@v0.4.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.4.0
 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-bridge-en -version                      # bridge-en 0.3.0
+bridge-en -version                      # bridge-en 0.4.0
 ```
 
 **2. Init.** Writes the instructions for AI agents (and you). Documents only,
@@ -188,7 +195,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0   # the version go.mod pins
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0   # the version go.mod pins
       - run: go test ./...
       - run: bridge-en -check features/*/
   english:
@@ -202,8 +209,8 @@ jobs:
         with: { fetch-depth: 0 }    # the comment diffs against the PR's base
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.3.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.4.0
         # with: { features: "features/*/", max-chars: "60000" }
 ```
 
@@ -229,6 +236,55 @@ git diff                         # review every .en change, then open a PR
 
 A new version can change the English of every feature (new wording, new
 rules); the `.en` diff in that pull request shows exactly how.
+
+### 0.3.x to 0.4.0: breaking change (ownership, strict GET queries)
+
+0.4.0 adds two rules, and it is a **breaking change**: an app whose CI
+passed on 0.3.x keeps compiling, but the `.en` of every GET changes (so
+`-check` fails until `-write`), `-check` refuses writes to owned tables once
+you declare an owner, and a GET client that sends an undeclared query
+parameter now gets HTTP 400.
+
+1. **G10 (runtime, no code change):** a GET request whose query string has a
+   parameter the action does not declare with `query:"<name>"`, also in
+   another letter case (`?Limit=5`) or a path value's name, is answered with
+   HTTP 400 `bad_request` and the action does not run; before, it was
+   ignored. Find clients that send extra parameters (cache-busters like
+   `?_=123`, tracking parameters, typos such as `?limt=5`) and stop sending
+   them, or declare the value on the action.
+2. **A4 (opt-in per table):** for each table whose rows belong to a user,
+   add `-- owner: <col>` on the comment line right above its `CREATE TABLE`
+   in `schema.sql`, where `<col>` is the column holding the signed-in user
+   (`INTEGER` for ``User int64 `json:"user" server:"user"` ``, `TEXT` for a
+   string user). A table without the annotation is not checked, so 0.4.0
+   refuses nothing new until you add one; add it to every table that holds
+   users' private rows.
+3. **Admins:** if some roles may change anyone's rows, mark them once in
+   `cmd/server`, chained on the role list:
+   `var AppRoles = httpx.AppRoles("customer", "organizer", "admin").BypassOwnership("admin")`.
+   Only an action whose `Roles` lists only such roles may write an owned
+   table without the owner filter.
+4. Run `bridge-en -check features/*/`. For each A4 refusal, limit the
+   write to the caller's rows: add `AND <col> = sqlc.arg(<col>)` to the
+   UPDATE's `WHERE` (or set `<col>` in the INSERT), run `sqlc generate`, and
+   pass `<Col>: in.User` (the action takes the signed-in user from
+   ``User int64 `json:"user" server:"user"` ``, never from a request field).
+   A `Public` action cannot write an owned table: give it `Roles`. If the
+   action is really for admins only, change its `Roles` to roles that bypass
+   ownership instead. An UPDATE that changed nothing now also means "not
+   yours": say so in the failure case (`intent.md`, for example "the event
+   does not exist, or the signed-in user does not own it").
+5. Run `bridge-en -write features/*/` and review every `.en` diff: each GET
+   gains the line "The query string is as strict as a body: ..." and the
+   HTTP 400 answer says "or the query string has a parameter not listed
+   above"; each step on an owned table gains an "Ownership: ..." sentence
+   ("only events you own (`organizer_id` is the signed-in user) can be
+   changed by this step", or, for a read, whether it is limited to the
+   caller's rows).
+6. Add checks: over HTTP against SQLite, user B cannot change user A's row
+   (nothing written), and an undeclared query parameter gets HTTP 400.
+7. Run `bridge-en init -force` to get the 0.4.0 `AGENTS.md` (owned tables,
+   strict GET queries).
 
 ### 0.2.x to 0.3.0: breaking change (who may call each action)
 
@@ -349,7 +405,7 @@ GitHub Copilot and Gemini CLI.
 cmd/bridge-en/            the CLI (render, -check, -write, init, pr-comment)
 adapter/                  the compiler: grammar.go (rule list), templates.go (every English word),
                           intent.go (I1-I3), parse/handle/expr.go, sql.go, domain.go, plumbing.go,
-                          schema.go, check.go, pin.go
+                          schema.go (keys, A4 owner annotations), owner.go (A4), check.go, pin.go
 adapter/testdata/         a parse-only fixture app: good/ (render, with golden .en and checks),
                           bad/ (refused, want.err), bad_intent/ (intent refusals, want.err)
 internal/initdocs/        the AGENTS.md and pointer templates (go:embed) for bridge-en init
@@ -380,12 +436,14 @@ and publishes the archives, `RULEBOOK.md` and `SHA256SUMS`.
 | `adapter TestAgentsSkeletonRenders` | the example feature in the generated AGENTS.md passes I1-I3 and renders |
 | `adapter TestRulebookCoversGrammar` | RULEBOOK.md has exactly one section per rule ID |
 | `adapter TestRolesContract`, `TestRolesRefusals`, `TestAppRoles` | A1-A3, T3: who may call each action, the app-wide role list, the signed-in user and role in the English, and every refused form |
+| `adapter TestOwnershipEnglish`, `TestOwnershipRefusals`, `TestOwnerAnnotations`, `TestBypassOwnership` | A4: the "Ownership:" sentence of every step on an owned table; an unscoped write, a write scoped to a request field or a literal, a Public writer, a given-away row, a user of another type, a malformed annotation and a malformed bypass are refused at `file:line:col` |
+| `runtime/httpx TestStrictQueryRule` | G10: a GET with an undeclared query parameter (any letter case, a path name) is HTTP 400 and the action does not run |
 | `runtime/httpx TestRolesRule`, `TestZeroAccessDeniesEveryone`, `TestPublicRule`, `TestUserAndRoleAreNeverSent` | 401 / 403 before the action runs, deny by default, the signed-in user and role filled by the server and never accepted from the request |
 | `adapter TestClock*`, `TestSession*`, `TestRollbackWording`, `TestStrictClaimCheck`, `TestMultiRowClaim*`, `TestINShapes`, `TestPrimaryKeys`, `TestSQLShapes`, `TestClaimRules`, `TestRefusalsInHandle`, `TestDomainUnderGrammar`, `TestBoundNeedsTxn`, `TestCheckPin` | the exact English and refusals of each rule (see RULEBOOK.md) |
 | `internal/initdocs Test*` | init writes only the five documents, keeps existing files without `-force`, and AGENTS.md covers the workflow |
 | `internal/prcomment Test*` | the comment shows each changed feature's intent (full or diff) and `.en` diff, starts with its marker, is the same on every run, and stays under its size limit |
 | `runtime/... Test*` | every HTTP and transaction sentence the English quotes |
-| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency; over HTTP, 401, 403 and the allowed roles (create_event, create_invoice, list_customer_invoices), nothing written on 401/403 |
+| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency; over HTTP, 401, 403 and the allowed roles (create_event, create_invoice, list_customer_invoices), nothing written on 401/403; organizer B cannot rename organizer A's event (rename_event, nothing written) while an admin can (admin_rename_event); an undeclared query parameter is HTTP 400 (list_customer_invoices, my_events) |
 
 ## License
 

@@ -7,7 +7,7 @@
 //
 // bridge-en is built from the same module version and quotes the
 // declarations below (BadInput, Internal, SuccessStatus, InputRule,
-// QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ErrorBody, ClockRule in
+// QueryInputRule, BadQueryWhen, StrictQueryRule, TxRule, ReadTxRule, ErrorBody, ClockRule in
 // clock.go, SessionCookie, SessionRule, SessionValue and ServerSetWhen in
 // session.go, PublicRule, RolesRule, Unauthenticated, Forbidden, UserRule,
 // RoleRule, SignedOutRule and SignedOutZero in access.go, and ListRule, ListRuleExact, ListElems and ListWhen in
@@ -115,6 +115,9 @@ func Bind[I any, O any](access Access, handle func(context.Context, I) (O, error
 		}
 		var in I
 		msg := serverSetSent[I](r) // ClockRule, SessionRule, UserRule, RoleRule: never from the query string
+		if msg == "" && r.Method == http.MethodGet {
+			msg = unknownQuery[I](r) // StrictQueryRule (G10): no query parameter the action does not declare
+		}
 		if msg == "" {
 			if r.Method == http.MethodGet && hasParamTags[I]() {
 				in, msg = decodeParams[I](r)

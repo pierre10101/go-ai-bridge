@@ -26,8 +26,8 @@ import (
 //     the declared outcomes BadInput and Internal, the SuccessStatus table,
 //     InputRule, QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ClockRule,
 //     SessionRule, SessionValue, ServerSetWhen, ListRule, ListRuleExact,
-//     ListElems, ListWhen and the ErrorBody shape. Bind uses these values and httpx's own tests
-//     prove each one, so the HTTP and transaction sentences in every .en file
+//     ListElems, ListWhen, StrictQueryRule (G10) and the ErrorBody shape.
+//     Bind uses these values and httpx's own tests prove each one, so the HTTP and transaction sentences in every .en file
 //     are tied to the plumbing.
 
 // outcome is an httpx.Outcome as the English uses it.
@@ -61,14 +61,17 @@ type plumbing struct {
 	SignedOutRule      string // T3, Public actions: {zero}
 	SignedOutZero      map[string]string
 	ErrorShape         string
+	StrictQueryRule    string // G10: a GET's query string takes only the listed values
 }
 
 // appRoles is the app-wide role list (A2): the one httpx.AppRoles(...) call
 // in cmd/server.
 type appRoles struct {
-	list []string
-	has  map[string]bool
-	pos  token.Position
+	list   []string
+	has    map[string]bool
+	pos    token.Position
+	bypass []string        // A4: the roles of .BypassOwnership(...) chained on the call, in declared order
+	passes map[string]bool // A4: the same, as a set
 }
 
 // env is everything outside action.go the adapter reads for one slice.
@@ -77,7 +80,8 @@ type env struct {
 	domain  *domainInfo
 	http    *plumbing
 	queries map[string]*SQLQuery
-	roles   *appRoles // nil when cmd/server declares no httpx.AppRoles
+	roles   *appRoles         // nil when cmd/server declares no httpx.AppRoles
+	owners  map[string]*owner // A4: owned tables (schema.sql "-- owner: <col>"), by table
 }
 
 // findModuleRoot walks up from dir to the directory holding go.mod.
@@ -175,6 +179,7 @@ func loadHTTPX() (*plumbing, error) {
 		RoleRule:        httpx.RoleRule,
 		SignedOutRule:   httpx.SignedOutRule,
 		SignedOutZero:   httpx.SignedOutZero,
+		StrictQueryRule: httpx.StrictQueryRule,
 	}
 	for m, st := range httpx.SuccessStatus {
 		p.Success[m] = st
@@ -258,7 +263,12 @@ func loadEnv(dir string) (*env, Refusals, error) {
 		return nil, nil, err
 	}
 	refusals = append(refusals, roleErrs...)
-	return &env{root: root, domain: d, http: h, queries: q, roles: roles}, append(domainErrs, refusals...), nil
+	owners, ownerErrs, err := loadOwners(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	refusals = append(refusals, ownerErrs...)
+	return &env{root: root, domain: d, http: h, queries: q, roles: roles, owners: owners}, append(domainErrs, refusals...), nil
 }
 
 // loadAppRoles reads A2: the app's roles, declared once in cmd/server as
@@ -271,6 +281,7 @@ func loadAppRoles(root string) (*appRoles, Refusals, error) {
 	sort.Strings(paths)
 	fset := token.NewFileSet()
 	var found *appRoles
+	var bypassCall *ast.CallExpr // A4: <AppRoles call>.BypassOwnership(...)
 	var errs Refusals
 	refuse := func(n ast.Node, construct, hint string) {
 		errs = append(errs, Refusal{Pos: fset.Position(n.Pos()), Construct: construct, Context: "A2 app roles", Hint: hint})
@@ -294,7 +305,24 @@ func loadAppRoles(root string) (*appRoles, Refusals, error) {
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || exprString(call.Fun) != hx+".AppRoles" {
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "BypassOwnership" {
+				inner, ok := sel.X.(*ast.CallExpr)
+				switch {
+				case !ok || exprString(inner.Fun) != hx+".AppRoles":
+					errs = append(errs, Refusal{Pos: fset.Position(call.Pos()), Construct: exprString(call.Fun) + " that is not chained on the httpx.AppRoles call",
+						Context: "A4 ownership", Hint: bypassHint})
+				case bypassCall != nil:
+					errs = append(errs, Refusal{Pos: fset.Position(call.Pos()), Construct: "second BypassOwnership call (the first is at " + fset.Position(bypassCall.Pos()).String() + ")",
+						Context: "A4 ownership", Hint: bypassHint})
+				default:
+					bypassCall = call
+				}
+				return true
+			}
+			if exprString(call.Fun) != hx+".AppRoles" {
 				return true
 			}
 			if found != nil {
@@ -322,5 +350,31 @@ func loadAppRoles(root string) (*appRoles, Refusals, error) {
 			return true
 		})
 	}
+	if bypassCall != nil && found != nil {
+		found.passes = map[string]bool{}
+		if len(bypassCall.Args) == 0 || bypassCall.Ellipsis.IsValid() {
+			errs = append(errs, Refusal{Pos: fset.Position(bypassCall.Pos()), Construct: "BypassOwnership without roles", Context: "A4 ownership", Hint: bypassHint})
+		}
+		for _, a := range bypassCall.Args {
+			role, ok := stringLit(a)
+			bad := func(construct string) {
+				errs = append(errs, Refusal{Pos: fset.Position(a.Pos()), Construct: construct, Context: "A4 ownership", Hint: bypassHint})
+			}
+			switch {
+			case !ok:
+				bad("ownership-bypass role " + exprString(a) + " that is not a string literal")
+			case !found.has[role]:
+				bad(fmt.Sprintf("ownership-bypass role %q that httpx.AppRoles does not declare", role))
+			case found.passes[role]:
+				bad(fmt.Sprintf("ownership-bypass role %q listed twice", role))
+			default:
+				found.passes[role] = true
+				found.bypass = append(found.bypass, role)
+			}
+		}
+	}
 	return found, errs, nil
 }
+
+// bypassHint is attached to refusals of the ownership-bypass declaration.
+const bypassHint = "Mark the roles that bypass ownership (A4) once, chained on the app's role list in cmd/server: var AppRoles = httpx.AppRoles(\"customer\", \"organizer\", \"admin\").BypassOwnership(\"admin\"); each one a role that list declares, given as a string literal"

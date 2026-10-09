@@ -16,7 +16,7 @@ import (
 )
 
 // appRoles is the list cmd/server/routes.go declares (AppRoles).
-var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin")
+var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin").BypassOwnership("admin")
 
 // identity stands in for the app's sign-in hook: the signed-in user and role
 // come from the test headers (a real app reads its own session cookie and

@@ -37,7 +37,8 @@ type Identity func(r *http.Request) (user, role string, ok bool)
 // RoleSet is every role a signed-in user of the app can have, declared
 // once in cmd/server with AppRoles (grammar A2).
 type RoleSet struct {
-	names map[string]bool
+	names  map[string]bool
+	bypass map[string]bool // BypassOwnership (grammar A4)
 }
 
 // AppRoles declares the app's roles: lowercase identifiers
@@ -56,6 +57,32 @@ func AppRoles(names ...string) RoleSet {
 
 // Has reports whether the app declared role.
 func (s RoleSet) Has(role string) bool { return s.names[role] }
+
+// BypassOwnership marks roles of the set that bypass ownership (grammar
+// A4), once, chained on the app's one declaration in cmd/server:
+//
+//	var AppRoles = httpx.AppRoles("customer", "organizer", "admin").BypassOwnership("admin")
+//
+// bridge-en reads it: an action whose Roles lists only such roles may write
+// a table that schema.sql declares owned (`-- owner: <col>`) without
+// limiting the write to the signed-in user's rows; any other action must.
+// It changes nothing at runtime: who may call an action is still its Roles
+// (Bind), and ownership is enforced by the SQL that bridge-en -check
+// accepts. Each role must be one the set declares, at least one, each once
+// (else it panics when the app starts).
+func (s RoleSet) BypassOwnership(names ...string) RoleSet {
+	assert.Pre(len(names) > 0, "BypassOwnership lists at least one role")
+	out := RoleSet{names: s.names, bypass: map[string]bool{}}
+	for _, n := range names {
+		assert.Pre(s.names[n], "BypassOwnership lists only roles httpx.AppRoles declares: "+n)
+		assert.Pre(!out.bypass[n], "BypassOwnership lists each role once: "+n)
+		out.bypass[n] = true
+	}
+	return out
+}
+
+// BypassesOwnership reports whether role was marked with BypassOwnership.
+func (s RoleSet) BypassesOwnership(role string) bool { return s.bypass[role] }
 
 // Access is who may call one action: Public, or Roles(...). An action
 // declares it as `var Roles = httpx.Roles("organizer", "admin")` or

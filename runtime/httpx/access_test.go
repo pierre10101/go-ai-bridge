@@ -233,6 +233,9 @@ func TestRoleDeclarationsPanic(t *testing.T) {
 		"AppRoles(1st)":    func() { AppRoles("1st") },
 		"AppRoles(twice)":  func() { AppRoles("a", "a") },
 		"AppRoles(hyphen)": func() { AppRoles("box-office") },
+		"Bypass()":         func() { AppRoles("admin").BypassOwnership() },
+		"Bypass(unknown)":  func() { AppRoles("admin").BypassOwnership("root") },
+		"Bypass(twice)":    func() { AppRoles("admin").BypassOwnership("admin", "admin") },
 	} {
 		func() {
 			defer func() {
@@ -245,6 +248,13 @@ func TestRoleDeclarationsPanic(t *testing.T) {
 	}
 	if a := Roles("organizer", "admin"); a.IsPublic() || strings.Join(a.List(), ",") != "organizer,admin" {
 		t.Fatalf("Roles: %+v", a)
+	}
+	set := AppRoles("organizer", "admin").BypassOwnership("admin")
+	if !set.Has("organizer") || !set.Has("admin") || !set.BypassesOwnership("admin") || set.BypassesOwnership("organizer") {
+		t.Fatalf("BypassOwnership: %+v", set)
+	}
+	if AppRoles("admin").BypassesOwnership("admin") {
+		t.Fatal("no role bypasses ownership unless marked")
 	}
 	if !Public.IsPublic() || Public.List() != nil {
 		t.Fatal("Public")

@@ -33,9 +33,13 @@ CREATE TABLE IF NOT EXISTS tickets (
     sold_to    TEXT    NOT NULL DEFAULT ''
 );
 
--- One row per event (create_event, my_events). organizer_id: the signed-in
--- user who created it, and created_as: the role they had then. Both come
--- from the server (server:"user", server:"role"), never from the request.
+-- One row per event (create_event, my_events, rename_event,
+-- admin_rename_event). organizer_id: the signed-in user who created it, and
+-- created_as: the role they had then. Both come from the server
+-- (server:"user", server:"role"), never from the request. The organizer
+-- owns the event (A4): an action that a role without the ownership bypass
+-- may call writes only events whose organizer_id is the signed-in user.
+-- owner: organizer_id
 CREATE TABLE IF NOT EXISTS events (
     id           INTEGER PRIMARY KEY,
     organizer_id INTEGER NOT NULL CHECK (organizer_id > 0),

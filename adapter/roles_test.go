@@ -63,7 +63,10 @@ func TestRolesContract(t *testing.T) {
 		t.Fatalf("want %q in:\n%s", want, got)
 	}
 	// Public: anyone; no 401/403 line; the user and role say their signed-out value.
-	got, err = mutateEvent(t, `httpx.Roles("organizer", "admin")`, `httpx.Public`)
+	// (In the fixture app, events is owned (A4) and a Public action never
+	// writes an owned table, so this runs in an app without the annotation.)
+	root := tempApp(t, withoutOwner(t), "")
+	got, err = Render(addSlice(t, root, eventFixture, "create_event", "action.go", `httpx.Roles("organizer", "admin")`, `httpx.Public`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,8 +163,7 @@ func TestAppRoles(t *testing.T) {
 			copyDir(t, "testdata/internal", filepath.Join(root, "internal"))
 			gomod, _ := os.ReadFile("testdata/go.mod")
 			os.WriteFile(filepath.Join(root, "go.mod"), []byte(strings.Replace(string(gomod), "=> ../..", "=> "+mustAbs(t, ".."), 1)), 0o644)
-			schema, _ := os.ReadFile("testdata/schema.sql")
-			os.WriteFile(filepath.Join(root, "schema.sql"), schema, 0o644)
+			os.WriteFile(filepath.Join(root, "schema.sql"), []byte(withoutOwner(t)), 0o644) // A2 only: no A4 owner
 			if tc.routes != "" {
 				os.MkdirAll(filepath.Join(root, "cmd", "server"), 0o755)
 				os.WriteFile(filepath.Join(root, "cmd", "server", "routes.go"), []byte(tc.routes), 0o644)

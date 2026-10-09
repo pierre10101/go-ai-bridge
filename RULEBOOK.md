@@ -30,8 +30,9 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Expressions: E1-E7](#expressions-e1-e7)
 - [SQL: Q0-Q7](#sql-q0-q7)
 - [Rules across statements: T1-T3, W1](#rules-across-statements-t1-t3-w1)
-- [Who may call it: A1-A3](#who-may-call-it-a1-a3)
+- [Who may call it: A1-A4](#who-may-call-it-a1-a4)
 - [Outside the slice: M1-M3, H1](#outside-the-slice-m1-m3-h1)
+- [GET requests: G10](#get-requests-g10)
 - [Conditional claim and state-transition rules](#conditional-claim-and-state-transition-rules)
 - [Hard limits](#hard-limits)
 - [The fixture app](#the-fixture-app)
@@ -50,11 +51,11 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.3.0
+go get github.com/pierre10101/go-ai-bridge@v0.4.0
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.3.0
-bridge-en -version                      # bridge-en 0.3.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.4.0
+bridge-en -version                      # bridge-en 0.4.0
 ```
 
 Then `bridge-en init` writes `AGENTS.md` and pointer files for AI agents
@@ -64,7 +65,7 @@ into the app (documents only; see
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.3.0
+require github.com/pierre10101/go-ai-bridge v0.4.0
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -75,9 +76,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -91,19 +92,24 @@ Without GitHub Actions: `go install …@v<version>` as above, or download
 check the hash.
 
 **Why app pull requests cannot rewrite the English.** The English quotes the
-runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`, `httpx.SessionRule`, `httpx.ListRule`, `httpx.RolesRule`, `httpx.UserRule`),
+runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`, `httpx.SessionRule`, `httpx.ListRule`, `httpx.RolesRule`, `httpx.UserRule`, `httpx.StrictQueryRule`),
 and the app runs that same runtime: both come from the one module version in
 `go.mod`, verified by the Go checksum database. The app has no copy to edit.
 `bridge-en -check` (and `-write`) first refuse an app whose `go.mod` requires
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.3.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.3.0), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.4.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.4.0), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
-diff of every `.en` file, commit. 0.3.0 is a breaking change: every action
+diff of every `.en` file, commit. 0.4.0 is a breaking change: a table can
+declare its owner (`-- owner: <col>` in `schema.sql`) and then every write
+to it from an action a non-admin role may call is limited to the signed-in
+user's rows (A4), and a GET that sends a query parameter it does not declare
+is answered with HTTP 400 (G10); the migration steps are in README.md,
+"0.3.x to 0.4.0". 0.3.0 was one too: every action
 declares who may call it (`var Roles = httpx.Roles(...)` or `httpx.Public`,
 A1), the app declares its roles once in `cmd/server` (`httpx.AppRoles`, A2),
 and `cmd/server` binds each route with `httpx.Bind(<slice>.Roles, ...)`
@@ -117,10 +123,10 @@ format; see README.md, "0.1.x to 0.2.0".)
 
 ```
 go.mod                       any module path; requires github.com/pierre10101/go-ai-bridge (the pin)
-schema.sql / schema.go       the app's schema; schema.go embeds it for store.Open
+schema.sql / schema.go       the app's schema (with "-- owner: <col>" above an owned table, A4); schema.go embeds it for store.Open
 sqlc.yaml                    one entry per slice
 cmd/server/main.go           store.Open(ctx, path, schema), then serve Routes(db, <the app's sign-in hook>)
-cmd/server/routes.go         var AppRoles = httpx.AppRoles(...) (A2); one line per slice:
+cmd/server/routes.go         var AppRoles = httpx.AppRoles(...) (A2), .BypassOwnership(...) (A4); one line per slice:
                              mux.Handle(<slice>.Route, httpx.Bind(<slice>.Roles, ...txn.DB(db)...)) (A3);
                              return httpx.Identify(AppRoles, identity, mux)
 features/<slice>/            one directory per action (below)
@@ -152,7 +158,7 @@ over its `txn.DB` (H1, A3).
 Sign-in, password hashing and sessions are the app's own code, outside
 `features/` and outside bridge-en. The app gives the runtime one hook,
 `httpx.Identity` (who is signed in, with which role), installed once with
-`httpx.Identify` around all routes; see [Who may call it](#who-may-call-it-a1-a3).
+`httpx.Identify` around all routes; see [Who may call it](#who-may-call-it-a1-a4). Which rows of a table each signed-in user may change is declared in `schema.sql` (`-- owner: <col>`, A4).
 
 ## Writing a slice
 
@@ -311,7 +317,9 @@ field tagged `clock:"now"` (T1), one `int64` or `string` field tagged
 (`int64` or `string`) and role `json:"role" server:"role"` (`string`) (T3)
 are set by the server; the caller must not send them
 (body or query string: HTTP 400), and the English lists them apart from the
-fields the caller sends. GET fields take `path:"<name>"` or `query:"<name>"`.
+fields the caller sends. GET fields take `path:"<name>"` or `query:"<name>"`,
+and a GET request that sends any other query parameter is answered with
+HTTP 400 (G10).
 
 ```go
 type Input struct {
@@ -1070,10 +1078,11 @@ English: ``If no seat was changed in step 2 and the found seat's `held_by` equal
 
 ---
 
-## Who may call it: A1-A3
+## Who may call it: A1-A4
 
 Every action says who may call it, and the runtime enforces it **before**
-`Handle` runs. There is no default: an action that says nothing is refused
+`Handle` runs (A1-A3); which rows it may change in a table that belongs to
+its users is declared in `schema.sql` and enforced by `-check` (A4). There is no default: an action that says nothing is refused
 (deny by default). Sign-in itself (passwords, sessions) is the app's; the
 app tells the runtime who is signed in through one hook.
 
@@ -1184,6 +1193,124 @@ Refused: a route bound without its own Roles (`httpx.Bind(handle)`,
 `httpx.Bind(httpx.Public, ...)`, another slice's Roles) -
 `cmd/server: create_event.Route is not served with github.com/pierre10101/go-ai-bridge/runtime/httpx.Bind(create_event.Roles, ...) over queries built on github.com/pierre10101/go-ai-bridge/runtime/txn.DB (H1, A3); ...` (`TestBoundNeedsTxn`)
 
+### A4
+
+**ownership** - a table whose rows belong to a user declares its **owner
+column** in `schema.sql`, once, with a comment attached to its `CREATE
+TABLE`: on the comment lines right above it (no blank line in between), or
+at the end of the `CREATE TABLE` line itself.
+
+```sql
+-- One row per event. organizer_id: the signed-in user who created it.
+-- owner: organizer_id
+CREATE TABLE IF NOT EXISTS events (
+    id           INTEGER PRIMARY KEY,
+    organizer_id INTEGER NOT NULL CHECK (organizer_id > 0),
+    title        TEXT    NOT NULL,
+    ...
+);
+```
+
+The owner column is one of the table's columns, `INTEGER` (for an `int64`
+signed-in user, T3) or `TEXT` (for a `string` one).
+
+**Who bypasses ownership** is declared once, app-wide, chained on the A2
+role list in `cmd/server`:
+
+```go
+var AppRoles = httpx.AppRoles("customer", "organizer", "finance", "admin").BypassOwnership("admin")
+```
+
+Each role it lists is one `AppRoles` declares (string literals, each once).
+It is a declaration for `bridge-en`, not a runtime check: who may call an
+action is still its `Roles` (A1, enforced by `httpx.Bind`), and ownership is
+enforced by the SQL that `-check` accepts. Why this form: the one place that
+lists the app's roles also says which of them are administrators, so a
+reviewer sees every bypass in one line, and an action cannot grant itself
+the bypass (its `Roles` can only name roles; the marker lives in
+`cmd/server`).
+
+**The rule.** An action that is `Public`, or whose `Roles` lists **any**
+role without the bypass (for example `httpx.Roles("organizer", "admin")`),
+writes an owned table only in the signed-in user's name:
+
+- a Q6 UPDATE (claim) has `<owner col> = sqlc.arg(<p>)` as an AND
+  condition of its `WHERE` (not inside an OR group) and does not `SET` the
+  owner column to anything else (no giving a row away);
+- a Q3 INSERT sets `<owner col> = sqlc.arg(<p>)`;
+- for `<p>` the action passes exactly its signed-in user, the Input field
+  tagged `server:"user"` (`OrganizerID: in.User`), whose type is the
+  column's. A request field (`organizer_id` the caller sends), a literal,
+  a let or a missing condition is refused;
+- a `Public` action never writes an owned table (signed out, its user is 0
+  or the empty text, which owns nothing).
+
+An action whose `Roles` lists **only** roles with the bypass (here
+`httpx.Roles("admin")`) may write any row.
+
+**Reads are not refused.** An owned row is often meant to be read by others
+(a public list of events, a customer reading an organizer's event), and a
+read changes nothing, so refusing unscoped reads would block ordinary
+features without protecting a write. Instead the English of every read of an
+owned table says whether it is limited to the caller's own rows, so a
+reviewer sees an unscoped read of private data in the `.en` diff.
+
+```sql
+-- name: RenameOwnEvent :execrows
+UPDATE events
+SET title = sqlc.arg(title)
+WHERE id = sqlc.arg(id) AND organizer_id = sqlc.arg(organizer_id);
+```
+```go
+var Roles = httpx.Roles("organizer")
+...
+renamed, err := a.q.RenameOwnEvent(ctx, db.RenameOwnEventParams{Title: in.Title, ID: in.EventID, OrganizerID: in.User})
+```
+
+English (`adapter/testdata/good/rename_event/rename_event.en`), after the
+claim sentence of the step:
+```
+2. Claim: in table `events`, set `title` = the request's `title` on each event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (...). ... Ownership: only events you own (`organizer_id` is the signed-in user) can be changed by this step. If the query fails, stop with HTTP 500 Internal Server Error.
+```
+and, for the other steps on an owned table:
+
+| Step | English |
+|---|---|
+| insert setting the owner to the user (`create_event.en`) | `` Ownership: the new event is yours (`organizer_id` is the signed-in user). `` |
+| read limited to the user (`my_events.en`) | `` Ownership: only events you own (`organizer_id` is the signed-in user) are read. `` |
+| read not limited to the user | `` Ownership: this read is not limited to events you own (`organizer_id` is not compared with the signed-in user). `` |
+| write by an admin-only action (`admin_rename_event.en`) | `` Ownership: this step is not limited to events you own (`organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. `` |
+
+The checks of `rename_event` prove it over HTTP against SQLite: organizer B
+renaming organizer A's event gets F2 (HTTP 404) and nothing is written,
+also when B sends A's id as `user` (HTTP 400); A renames it. The checks of
+`admin_rename_event` prove the admin renames anyone's event and an organizer
+gets HTTP 403.
+
+Refused (`file:line:col`, each with the fix: put `<col> = sqlc.arg(<col>)`
+in the WHERE or the INSERT and pass `in.User`, or restrict the action to
+roles that bypass ownership):
+- an UPDATE with no owner condition, from an action an organizer may call (`adapter/testdata/bad/owner_unscoped`) -
+  `testdata/bad/owner_unscoped/action.go:39:2: refused: write to owned table events (query RenameEvent) whose WHERE does not limit it to rows the signed-in user owns (organizer_id = the signed-in user) is not in the allowed pattern list (A4 ownership). Table events is owned by organizer_id (schema.sql:42:1), so an action that a role without the ownership bypass may call writes only rows the signed-in user owns: an UPDATE has organizer_id = sqlc.arg(organizer_id) as an AND condition of its WHERE (not inside an OR group) and sets organizer_id to nothing else, and an INSERT sets organizer_id = sqlc.arg(organizer_id); the action passes exactly the signed-in user for it (User int64 \`json:"user" server:"user"\`, then OrganizerID: in.User). A request field never counts, and a Public action never writes an owned table. If only administrators may do this, declare Roles with roles that bypass ownership (in cmd/server: httpx.AppRoles(...).BypassOwnership("admin"))`
+- the owner scoped to a field the caller sends, in an UPDATE and an INSERT (`adapter/testdata/bad/owner_from_body`) -
+  `testdata/bad/owner_from_body/action.go:41:106: refused: write to owned table events (query RenameEvent) whose owner column organizer_id is the request's \`organizer_id\`, which is not the signed-in user is not in the allowed pattern list (A4 ownership). ...` and
+  `testdata/bad/owner_from_body/action.go:48:65: refused: write to owned table events (query CopyEvent) whose owner column organizer_id is the request's \`organizer_id\`, which is not the signed-in user ...`
+- the annotation itself (`adapter/testdata/bad/owner_annotation`, a module of its own) -
+  `schema.sql:4:1: refused: owner column organiser_id, which table events does not declare (its columns: id, organizer_id, title) is not in the allowed pattern list (A4 ownership). Declare a table's owner once, on a comment line right above its CREATE TABLE (no blank line in between): -- owner: <col>, where <col> is one of its columns of type INTEGER (an int64 signed-in user, server:"user") or TEXT (a string one)`;
+  `schema.sql:12:1: refused: second owner annotation for table notes (the first is at schema.sql:11:1) ...`;
+  `schema.sql:19:1: refused: owner column score of type "REAL", which is neither INTEGER nor TEXT ...`;
+  `schema.sql:25:1: refused: owner annotation "-- owner: id, author" ...`;
+  `schema.sql:31:1: refused: owner annotation "-- owner: author" that is not attached to a CREATE TABLE ...`;
+  and a user field of another type than the owner column - `testdata/bad/owner_annotation/action.go:17:2: refused: signed-in user field User of type int64 for table notes, whose owner column author is TEXT (schema.sql:11:1) is not in the allowed pattern list (A4 ownership). The signed-in user is compared with the owner column, so they have the same type: User string \`json:"user" server:"user"\` for a TEXT owner column (or change the column's type in schema.sql)`
+- other forms (`TestOwnershipRefusals`): a `Public` action - `refused: write to owned table events (query RenameOwnEvent) in a Public action ...`;
+  no `server:"user"` field - `refused: write to owned table events (query RenameOwnEvent) in an action without the signed-in user ...`;
+  the owner condition only inside an OR group, or `organizer_id = 7` - `... whose WHERE does not limit it ...`, `... whose owner column organizer_id is 7, which is not the signed-in user ...`;
+  `SET organizer_id = sqlc.arg(new_owner)` - `refused: change of the owner column organizer_id of owned table events (query RenameOwnEvent) ...`;
+  an INSERT without the owner column - `refused: insert into owned table events (query InsertEvent) that does not set its owner column organizer_id to the signed-in user ...`
+- the bypass declaration (`TestBypassOwnership`): a role `AppRoles` does not declare - `cmd/server/routes.go:5:69: refused: ownership-bypass role "root" that httpx.AppRoles does not declare is not in the allowed pattern list (A4 ownership). ...`;
+  a role twice, no role, a non-literal - `refused: ownership-bypass role "admin" listed twice ...`, `refused: BypassOwnership without roles ...`, `refused: ownership-bypass role admin that is not a string literal ...`;
+  not chained on the `httpx.AppRoles(...)` call (`AppRoles.BypassOwnership("admin")` later, or twice) - `refused: AppRoles.BypassOwnership that is not chained on the httpx.AppRoles call ...`
+
 ---
 
 ## Outside the slice: M1-M3, H1
@@ -1244,8 +1371,8 @@ Refused: `seq+1` - `refused: arithmetic operator + is not in the allowed pattern
 `BadQueryWhen`, `TxRule`, `ReadTxRule`, `ClockRule`, `SessionCookie`,
 `SessionRule`, `SessionValue`, `ServerSetWhen`, `ListRule`, `ListRuleExact`,
 `ListElems`, `ListWhen`, `PublicRule`, `RolesRule`, `Unauthenticated`,
-`Forbidden`, `UserRule`, `RoleRule`, `SignedOutRule`, `SignedOutZero` and
-`ErrorBody`;
+`Forbidden`, `UserRule`, `RoleRule`, `SignedOutRule`, `SignedOutZero`,
+`StrictQueryRule` and `ErrorBody`;
 `bridge-en` quotes the values compiled into it, which are the app's because
 `go.mod` pins the same version (the pin check above), and httpx's own tests
 prove each one. `cmd/server` binds every route with the runtime's
@@ -1255,6 +1382,48 @@ prove each one. `cmd/server` binds every route with the runtime's
 English: `Steps 3 to 7 run in one database transaction. It begins with the query in step 3 and holds the database's write lock until it ends, ...`
 
 Refused: a route bound over a plain `*sql.DB`, or with an app's own `httpx` - `cmd/server: create_invoice.Route is not served with github.com/pierre10101/go-ai-bridge/runtime/httpx.Bind(create_invoice.Roles, ...) over queries built on github.com/pierre10101/go-ai-bridge/runtime/txn.DB (H1, A3); ...`
+
+---
+
+## GET requests: G10
+
+### G10
+
+**strict queries** - a GET request's query string takes only the values
+its Input declares with `query:"<name>"`, as strictly as a JSON body takes
+only its listed fields. `httpx.Bind` (`runtime/httpx`) answers HTTP 400
+`bad_request`, and the action does not run, when a GET sends any other query
+parameter: an unknown name (`?debug=1`, `?offset=10`, a cache-buster
+`?_=123`), a declared name in another letter case (`?Limit=5`), or a path
+value's name (`?id=2`). A server-set name (`now`, `session`, `user`,
+`role`, T1-T3) is HTTP 400 too, in any letter case (with its own message).
+A GET that declares no query value (`my_events`) refuses every query
+parameter. Before 0.4.0 an unknown query parameter was ignored, so a typo
+(`?limt=5`) silently gave the default page.
+
+```go
+type Input struct {
+	CustomerID int64 `json:"customer_id" path:"id"`
+	After      int64 `json:"after" query:"after"`
+	Limit      int64 `json:"limit" query:"limit"`
+}
+```
+English (`adapter/testdata/good/list_customer_invoices/list_customer_invoices.en`,
+quoting `httpx.StrictQueryRule` after the GET inputs, and
+`httpx.BadQueryWhen` in the 400 answer):
+```
+The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
+...
+- HTTP 400 Bad Request, id "bad_request", with a message describing the problem, if a path value is missing, a value is not a whole number, a query value appears more than once, or the query string has a parameter not listed above (names are case-sensitive). The action does not run.
+```
+`runtime/httpx` `TestStrictQueryRule` proves each sentence; the
+`list_customer_invoices` and `my_events` checks prove it over HTTP against
+SQLite (`?debug=1`, `?Limit=2`, `?id=2`, `?x=1`: HTTP 400; the declared
+`?limit=2&after=3`: HTTP 200).
+
+Refused: nothing in `action.go` (the rule is the runtime's answer, said in
+the English of every GET). At runtime: `GET /customers/1/invoices?offset=1` -
+HTTP 400 `{"error": {"id": "bad_request", "message": "query parameter \"offset\" is not one this action takes"}}`.
 
 ---
 
@@ -1269,7 +1438,9 @@ a hold, approving a request, consuming a one-time token. The seat hold in
    T2, T3). No clock inside logic, and the caller never names who they are
    in the body: the holder or owner written by a claim is `in.Session`
    (`server:"session"`) or `in.User` (`server:"user"`), never a `person_id`
-   or `user_id` input. Store when a hold ends (`SET expires_at =
+   or `user_id` input. In a table that declares its owner (A4), the claim
+   also names the owner: `AND organizer_id = sqlc.arg(organizer_id)` with
+   `OrganizerID: in.User`. Store when a hold ends (`SET expires_at =
    sqlc.arg(now) + 600`) and compare that column with the server-set `now`;
    the English names the boundary exactly (Q6 table): `expires_at <=
    sqlc.arg(now)` is "`expires_at` is no later than the current time", so a
@@ -1339,7 +1510,7 @@ writes documents only, never code, into the directory:
 
 | File | For | Content |
 |---|---|---|
-| `AGENTS.md` | every agent (the cross-tool standard) and people | the workflow: install by the go.mod pin, intent first, `-check` after every edit, `-write` and read the `.en` against the intent, never edit `.en`, the server's time, session and signed-in user and role passed in, every action's required `Roles` declaration, claims, a thin UI, countdowns from the server's `now`/`expires_at`, errors on `error.id`, pull requests only, and an example feature |
+| `AGENTS.md` | every agent (the cross-tool standard) and people | the workflow: install by the go.mod pin, intent first, `-check` after every edit, `-write` and read the `.en` against the intent, never edit `.en`, the server's time, session and signed-in user and role passed in, every action's required `Roles` declaration, owned tables (A4) and strict GET queries (G10), claims, a thin UI, countdowns from the server's `now`/`expires_at`, errors on `error.id`, pull requests only, and an example feature |
 | `.cursor/rules/bridge-en.mdc` | Cursor (`alwaysApply: true`) | "follow AGENTS.md" and the five rules that matter most |
 | `CLAUDE.md` | Claude Code | the same pointer |
 | `.github/copilot-instructions.md` | GitHub Copilot | the same pointer |
@@ -1381,8 +1552,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.3.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.3.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.4.0
         # with:
         #   features: "features/*/"   # default
         #   max-chars: "60000"        # default

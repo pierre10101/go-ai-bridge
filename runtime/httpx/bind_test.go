@@ -205,3 +205,54 @@ func TestGETBadLimitIs400(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 }
+
+// StrictQueryRule (G10) and BadQueryWhen: a GET whose query string has a
+// parameter the action does not declare, in any letter case other than the
+// declared one, is answered with BadInput and the action does not run; the
+// declared ones still work. A GET that declares no query value refuses any.
+func TestStrictQueryRule(t *testing.T) {
+	ran := false
+	mux := http.NewServeMux()
+	mux.Handle("GET /customers/{id}/invoices", Bind(Public, func(_ context.Context, in listIn) (out, error) {
+		ran = true
+		return out{OK: true}, nil
+	}))
+	type none struct {
+		User int64 `json:"user" server:"user"`
+	}
+	mux.Handle("GET /me", Bind(Public, func(_ context.Context, in none) (out, error) {
+		ran = true
+		return out{OK: true}, nil
+	}))
+	for _, url := range []string{
+		"/customers/1/invoices?limit=5&debug=1",
+		"/customers/1/invoices?Limit=5",
+		"/customers/1/invoices?customer_id=2",
+		"/customers/1/invoices?id=2",
+		"/me?x=1",
+		"/me?limit=1",
+	} {
+		ran = false
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+		if rec.Code != BadInput.Status || ran {
+			t.Errorf("%s: status %d, ran %v: %s", url, rec.Code, ran, rec.Body)
+		}
+		var eb ErrorBody
+		_ = json.Unmarshal(rec.Body.Bytes(), &eb)
+		if eb.Error.ID != BadInput.ID || !strings.Contains(eb.Error.Message, "is not one this action takes") {
+			t.Errorf("%s: body %s", url, rec.Body)
+		}
+	}
+	for _, url := range []string{"/customers/1/invoices", "/customers/1/invoices?limit=5&after=9", "/me"} {
+		ran = false
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+		if rec.Code != http.StatusOK || !ran {
+			t.Errorf("%s: status %d, ran %v: %s", url, rec.Code, ran, rec.Body)
+		}
+	}
+	if !strings.Contains(BadQueryWhen, "a parameter not listed above") || !strings.Contains(StrictQueryRule, "a query parameter that is not listed above") {
+		t.Fatal("BadQueryWhen and StrictQueryRule must say what unknownQuery does")
+	}
+}

@@ -691,21 +691,21 @@ func (w *walker) query(s *ast.AssignStmt) {
 		return strings.Join(parts, " and ")
 	}
 	loc := w.locals[result]
-	var text string
+	var text, fails string
 	switch q.Shape {
 	case "count":
 		*loc = local{kind: "count", table: q.Table, where: where("where is"), has: where("where has"), whose: clock}
-		text = fmt.Sprintf(st("count"), plural(q.Table), loc.where, q.Name, q.File) + " " + fmt.Sprintf(st("query fails"), w.internal())
+		text, fails = fmt.Sprintf(st("count"), plural(q.Table), loc.where, q.Name, q.File), fmt.Sprintf(st("query fails"), w.internal())
 	case "row":
 		*loc = local{kind: "row", table: q.Table, phrase: fmt.Sprintf(t("found row"), singular(q.Table)), cols: q.Cols}
-		text = fmt.Sprintf(st("row"), singular(q.Table), where("where is"), q.Name, q.File, singular(q.Table)) + " " +
+		text, fails = fmt.Sprintf(st("row"), singular(q.Table), where("where is"), q.Name, q.File, singular(q.Table)),
 			fmt.Sprintf(st("row fails"), singular(q.Table), w.internal())
 	case "page":
 		*loc = local{kind: "rows", table: q.Table, phrase: fmt.Sprintf(t("listed rows"), plural(q.Table)), cols: q.Cols}
 		limitEn := w.sqlValue(q.Limit, vals, "limit", q.Table)
 		cursorEn := w.sqlValue(q.CursorVal, vals, q.CursorCol, q.Table)
 		loc.limit = limitEn
-		text = fmt.Sprintf(st("page"), plural(q.Table), where("where is"), q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table)) + " " +
+		text, fails = fmt.Sprintf(st("page"), plural(q.Table), where("where is"), q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table)),
 			fmt.Sprintf(st("query fails"), w.internal())
 		w.f.hasPageQuery = true
 		if max, _ := pageSizes(); q.Limit.Kind == "int" && q.LimitN > max {
@@ -717,7 +717,7 @@ func (w *walker) query(s *ast.AssignStmt) {
 		for i, v := range q.Values {
 			assigns[i] = fmt.Sprintf(t("field"), v.Col, w.sqlValue(v.Val, vals, v.Col, q.Table))
 		}
-		text = fmt.Sprintf(st("insert"), singular(q.Table), q.Table, joinList(assigns), q.Name, q.File, singular(q.Table)) + " " +
+		text, fails = fmt.Sprintf(st("insert"), singular(q.Table), q.Table, joinList(assigns), q.Name, q.File, singular(q.Table)),
 			fmt.Sprintf(st("insert fails"), w.internal())
 	case "claim":
 		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField}
@@ -729,9 +729,13 @@ func (w *walker) query(s *ast.AssignStmt) {
 		for i, c := range q.Conds {
 			conds[i] = w.claimCond(c, vals, q.Table)
 		}
-		text = fmt.Sprintf(st("claim"), q.Table, joinList(sets), singular(q.Table), strings.Join(conds, " and "), q.Name, q.File, singular(q.Table)) + " " +
+		text, fails = fmt.Sprintf(st("claim"), q.Table, joinList(sets), singular(q.Table), strings.Join(conds, " and "), q.Name, q.File, singular(q.Table)),
 			fmt.Sprintf(st("query fails"), w.internal())
 	}
+	if own := w.ownership(s, q); own != "" { // A4: said between what the step does and how it fails
+		text += " " + own
+	}
+	text += " " + fails
 	// W1: a write to a table this action already read is check-then-write.
 	for _, wr := range q.Writes {
 		if at, ok := w.readAt[wr]; ok {
@@ -1095,12 +1099,14 @@ func (w *walker) finish() {
 	f.InputCount = count(len(f.BodyInput))
 	if f.Method == "GET" && len(f.BodyInput) == 0 {
 		f.InputIntro = docSentences["get no input"] // only server-set values (T1-T3)
+		f.InputRule = h.StrictQueryRule             // G10
 	} else if f.Method == "GET" {
 		f.InputIntro = docSentences["get input"]
 		f.InputRule = h.QueryInputRule
-		if f.InputRule == "" {
-			w.errs = append(w.errs, Refusal{Pos: token.Position{Filename: "runtime/httpx"}, Construct: "missing QueryInputRule", Context: "H1 http plumbing", Hint: "runtime/httpx declares QueryInputRule for GET list slices"})
+		if f.InputRule == "" || h.StrictQueryRule == "" {
+			w.errs = append(w.errs, Refusal{Pos: token.Position{Filename: "runtime/httpx"}, Construct: "missing QueryInputRule or StrictQueryRule", Context: "H1 http plumbing", Hint: "runtime/httpx declares QueryInputRule and StrictQueryRule for GET slices"})
 		}
+		f.InputRule += " " + h.StrictQueryRule // G10
 	} else {
 		f.InputIntro = "The request body is one JSON object with " + f.InputCount + " and no others:"
 		f.InputRule = h.InputRule

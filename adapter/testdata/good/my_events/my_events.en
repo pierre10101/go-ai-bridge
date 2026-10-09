@@ -9,6 +9,7 @@ The action "My events" answers GET /me/events.
 Who may call it: anyone, signed in or not.
 
 The request has no JSON body and takes no value from the path or the query string.
+The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
 
 The action also takes these 2 values, which the caller does not send:
 - `user`: set by the server: the signed-in user (from the app's sign-in session), or 0 when the caller is not signed in; the caller does not send it, and a request that does is answered with HTTP 400 below.
@@ -18,7 +19,7 @@ Every answer is JSON. An error answer is `{"error": {"id": <id>, "message": <mes
 - HTTP 200 OK on success, with an object of these 2 fields:
   - `events`: a whole number.
   - `role`: text.
-- HTTP 400 Bad Request, id "bad_request", with a message describing the problem, if a path value is missing, a value is not a whole number, or a query value appears more than once; or the request sends a value that the server sets, in the body or in the query string. The action does not run.
+- HTTP 400 Bad Request, id "bad_request", with a message describing the problem, if a path value is missing, a value is not a whole number, a query value appears more than once, or the query string has a parameter not listed above (names are case-sensitive); or the request sends a value that the server sets, in the body or in the query string. The action does not run.
 - HTTP 500 Internal Server Error, id "internal", message "internal error", if a query fails (step 1), an assertion fails (step 3) or ending the read-only transaction fails (step 4). The cause is written to the server log and is never sent to the caller.
 
 It reads table `events`, only through the queries in queries/, inside one read-only database transaction (see Steps).
@@ -33,7 +34,7 @@ The action does exactly this, in this order. A step that stops the action ends i
 
 Steps 1 to 3 run in one read-only database transaction. It begins with the query in step 1 and takes no write lock; every query in it reads the same snapshot of the database, and a write inside it fails. It ends in step 4, before the answer is sent.
 
-1. Read: count the events whose `organizer_id` is the signed-in user (query `CountMyEvents` in queries/count_events.sql). If the query fails, stop with HTTP 500 Internal Server Error.
+1. Read: count the events whose `organizer_id` is the signed-in user (query `CountMyEvents` in queries/count_events.sql). Ownership: only events you own (`organizer_id` is the signed-in user) are read. If the query fails, stop with HTTP 500 Internal Server Error.
 2. Build the answer:
    - `events` = the number of events whose `organizer_id` is the signed-in user
    - `role` = the signed-in user's role

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -11,7 +12,12 @@ import (
 )
 
 // BadQueryWhen is when Bind answers BadInput for a GET (quoted by bridge-en).
-const BadQueryWhen = "a path value is missing, a value is not a whole number, or a query value appears more than once"
+const BadQueryWhen = "a path value is missing, a value is not a whole number, a query value appears more than once, or the query string has a parameter not listed above (names are case-sensitive)"
+
+// StrictQueryRule is how Bind treats the query string of a GET (quoted by
+// bridge-en, grammar G10): the same strictness as a JSON body, which may
+// not have a field that is not listed. unknownQuery enforces it.
+const StrictQueryRule = "The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run."
 
 // QueryInputRule is how Bind treats GET path and query inputs (quoted by
 // bridge-en). The page sizes themselves live only in runtime/page
@@ -86,6 +92,32 @@ func decodeParams[I any](r *http.Request) (I, string) {
 		return in, fmt.Sprintf("GET input field %q needs a path or query struct tag", f.Name)
 	}
 	return in, ""
+}
+
+// unknownQuery returns a message when a GET request's query string has a
+// parameter that no Input field of I declares with a query tag, compared
+// case-sensitively like body field names (StrictQueryRule); "" otherwise.
+// A server-set name is answered by serverSetSent first, with its own message.
+func unknownQuery[I any](r *http.Request) string {
+	declared := map[string]bool{}
+	if t := reflect.TypeOf(*new(I)); t != nil && t.Kind() == reflect.Struct {
+		for i := 0; i < t.NumField(); i++ {
+			if q := t.Field(i).Tag.Get("query"); q != "" && !isServerSet(t.Field(i)) {
+				declared[q] = true
+			}
+		}
+	}
+	var unknown []string
+	for k := range r.URL.Query() {
+		if !declared[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) == 0 {
+		return ""
+	}
+	sort.Strings(unknown)
+	return fmt.Sprintf("query parameter %q is not one this action takes", unknown[0])
 }
 
 func setInt64Field(fv reflect.Value, raw, what string) string {

@@ -32,7 +32,7 @@ func newConn(t *testing.T) *sql.DB {
 }
 
 // appRoles is the list cmd/server/routes.go declares (AppRoles).
-var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin")
+var appRoles = httpx.AppRoles("customer", "organizer", "finance", "admin").BypassOwnership("admin")
 
 func identity(r *http.Request) (string, string, bool) {
 	user := r.Header.Get("X-Test-User")
@@ -87,6 +87,20 @@ func TestHTTPUserOrRoleInTheQueryIs400(t *testing.T) {
 			if json.Unmarshal(rec.Body.Bytes(), &body) != nil || rec.Code != httpx.BadInput.Status || body.Error.ID != httpx.BadInput.ID {
 				t.Errorf("%s (user %q): status %d %s", target, user, rec.Code, rec.Body)
 			}
+		}
+	}
+}
+
+// G10: "The query string is as strict as a body: a query parameter that is
+// not listed above (names are case-sensitive) is answered with HTTP 400".
+// My events lists none, so any query parameter is a bad request.
+func TestHTTPUnknownQueryParameterIs400(t *testing.T) {
+	conn := newConn(t)
+	for _, target := range []string{"/me/events?x=1", "/me/events?organizer_id=8", "/me/events?limit=5"} {
+		rec := serve(t, conn, target, "7", "organizer")
+		var body httpx.ErrorBody
+		if json.Unmarshal(rec.Body.Bytes(), &body) != nil || rec.Code != httpx.BadInput.Status || body.Error.ID != httpx.BadInput.ID {
+			t.Errorf("%s: status %d %s", target, rec.Code, rec.Body)
 		}
 	}
 }

@@ -13,6 +13,8 @@ app (bridge-en {{VERSION}}). The five rules that matter most:
    an id or role sent in the request body. Every action declares who may
    call it: `var Roles = httpx.Roles("<role>", ...)` or `httpx.Public`. A
    claim is one conditional UPDATE checked by `!= 1` (or
-   `!= int64(len(in.<List>))`).
+   `!= int64(len(in.<List>))`). A write to a table declared
+   `-- owner: <col>` in schema.sql is limited to `<col> = in.User` unless
+   only roles marked `.BypassOwnership(...)` in cmd/server may call it.
 5. Change code only through pull requests; never push to main. Install the
    bridge-en version that go.mod pins.
