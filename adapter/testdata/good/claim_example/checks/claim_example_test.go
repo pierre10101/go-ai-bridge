@@ -35,69 +35,73 @@ func newAction(t *testing.T) (*claim_example.Action, *sql.DB) {
 	return claim_example.New(db.New(txn.DB(conn))), conn
 }
 
-// claim calls the action the way httpx.Bind does: in one transaction (txn.Run).
-func claim(a *claim_example.Action, person, now int64) (claim_example.Output, error) {
-	in := claim_example.Input{SeatID: 1, PersonID: person, Now: now}
+// claim calls the action the way httpx.Bind does: in one transaction
+// (txn.Run), with the session and the current time set by the server.
+func claim(a *claim_example.Action, session, now int64) (claim_example.Output, error) {
+	in := claim_example.Input{SeatID: 1, Session: session, Now: now}
 	return txn.Run(context.Background(), func(ctx context.Context) (claim_example.Output, error) { return a.Handle(ctx, in) })
 }
 
-func holder(t *testing.T, conn *sql.DB) (by, at int64) {
+func holder(t *testing.T, conn *sql.DB) (by, until int64) {
 	t.Helper()
-	if err := conn.QueryRow(`SELECT held_by, held_at FROM seats WHERE id = 1`).Scan(&by, &at); err != nil {
+	if err := conn.QueryRow(`SELECT held_by, expires_at FROM seats WHERE id = 1`).Scan(&by, &until); err != nil {
 		t.Fatal(err)
 	}
-	return by, at
+	return by, until
 }
 
 func TestClaimsAFreeSeat(t *testing.T) {
 	a, conn := newAction(t)
 	out, err := claim(a, 7, t0)
-	if err != nil || out != (claim_example.Output{SeatID: 1, HeldBy: 7, HeldAt: t0}) {
+	if err != nil || out != (claim_example.Output{SeatID: 1, Now: t0}) {
 		t.Fatalf("out %+v err %v", out, err)
 	}
-	if by, at := holder(t, conn); by != 7 || at != t0 {
-		t.Fatalf("stored hold %d at %d", by, at)
+	if by, until := holder(t, conn); by != 7 || until != t0+600 {
+		t.Fatalf("stored hold %d until %d", by, until)
 	}
 }
 
-// The English: "`held_at` is 10 minutes or more before the current time".
-// A hold taken 599 seconds ago blocks the seat (F1, nothing written); one
-// taken exactly 600 seconds ago does not.
-func TestF1_SeatHeldLessThanTenMinutesAgo(t *testing.T) {
+// The English: "`expires_at` is no later than the current time". A hold
+// that expires one second or more after now blocks the seat (F1, nothing
+// written), also for the session that holds it; one whose expires_at is
+// exactly now has expired and does not.
+func TestF1_HoldNotExpired(t *testing.T) {
 	a, conn := newAction(t)
 	if _, err := claim(a, 7, t0); err != nil {
 		t.Fatal(err)
 	}
 	for _, later := range []int64{0, 1, 599} {
-		if _, err := claim(a, 8, t0+later); !errors.Is(err, claim_example.F1) {
-			t.Fatalf("%d seconds later: want F1, got %v", later, err)
-		}
-		if by, at := holder(t, conn); by != 7 || at != t0 {
-			t.Fatalf("%d seconds later: hold changed to %d at %d", later, by, at)
+		for _, session := range []int64{8, 7} {
+			if _, err := claim(a, session, t0+later); !errors.Is(err, claim_example.F1) {
+				t.Fatalf("session %d, %d seconds later: want F1, got %v", session, later, err)
+			}
+			if by, until := holder(t, conn); by != 7 || until != t0+600 {
+				t.Fatalf("session %d, %d seconds later: hold changed to %d until %d", session, later, by, until)
+			}
 		}
 	}
 	if _, err := claim(a, 8, t0+600); err != nil {
-		t.Fatalf("exactly 10 minutes later the hold no longer blocks: %v", err)
+		t.Fatalf("at expires_at the hold has expired and no longer blocks: %v", err)
 	}
-	if by, at := holder(t, conn); by != 8 || at != t0+600 {
-		t.Fatalf("hold %d at %d, want 8 at %d", by, at, t0+600)
+	if by, until := holder(t, conn); by != 8 || until != t0+1200 {
+		t.Fatalf("hold %d until %d, want 8 until %d", by, until, t0+1200)
 	}
 }
 
 func TestF1_NoSuchSeat(t *testing.T) {
 	a, _ := newAction(t)
-	in := claim_example.Input{SeatID: 99, PersonID: 7, Now: t0}
+	in := claim_example.Input{SeatID: 99, Session: 7, Now: t0}
 	_, err := txn.Run(context.Background(), func(ctx context.Context) (claim_example.Output, error) { return a.Handle(ctx, in) })
 	if !errors.Is(err, claim_example.F1) {
 		t.Fatalf("want F1, got %v", err)
 	}
 }
 
-func TestF2_PersonRequired(t *testing.T) {
+func TestF2_SessionRequired(t *testing.T) {
 	a, conn := newAction(t)
-	for _, person := range []int64{0, -1} {
-		if _, err := claim(a, person, t0); !errors.Is(err, claim_example.F2) {
-			t.Fatalf("person %d: want F2, got %v", person, err)
+	for _, session := range []int64{0, -1} {
+		if _, err := claim(a, session, t0); !errors.Is(err, claim_example.F2) {
+			t.Fatalf("session %d: want F2, got %v", session, err)
 		}
 	}
 	if by, _ := holder(t, conn); by != 0 {
@@ -105,26 +109,40 @@ func TestF2_PersonRequired(t *testing.T) {
 	}
 }
 
-// Over HTTP the server sets now (httpx.ClockRule); the caller cannot.
-func TestHTTPClaimUsesServerTime(t *testing.T) {
+// Over HTTP the server sets now (httpx.ClockRule) and the session from the
+// cookie (httpx.SessionRule); the caller can send neither, so it cannot
+// claim a seat in someone else's name.
+func TestF2_HTTPServerSetsSessionAndTime(t *testing.T) {
 	_, conn := newAction(t)
 	old := httpx.Now
 	httpx.Now = func() time.Time { return time.Unix(t0, 0) }
 	t.Cleanup(func() { httpx.Now = old })
 	mux := http.NewServeMux()
 	mux.Handle(claim_example.Route, httpx.Bind(claim_example.New(db.New(txn.DB(conn))).Handle))
-	post := func(body string) *httptest.ResponseRecorder {
+	post := func(cookie, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/holds", strings.NewReader(body))
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: httpx.SessionCookie, Value: cookie})
+		}
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/holds", strings.NewReader(body)))
+		mux.ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := post(`{"seat_id": 1, "person_id": 7, "now": 1}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("caller-sent now: status %d", rec.Code)
+	for _, body := range []string{`{"seat_id": 1, "now": 1}`, `{"seat_id": 1, "session": 8}`, `{"seat_id": 1, "person_id": 8}`} {
+		if rec := post("7", body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("caller-sent %s: status %d", body, rec.Code)
+		}
 	}
-	if rec := post(`{"seat_id": 1, "person_id": 7}`); rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"held_at":1800000000`) {
+	if rec := post("", `{"seat_id": 1}`); rec.Code != claim_example.F2.Status || !strings.Contains(rec.Body.String(), `"F2"`) {
+		t.Fatalf("no cookie: status %d body %s", rec.Code, rec.Body)
+	}
+	if rec := post("7", `{"seat_id": 1}`); rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"now":1800000000`) {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body)
 	}
-	if rec := post(`{"seat_id": 1, "person_id": 8}`); rec.Code != http.StatusConflict {
+	if by, until := holder(t, conn); by != 7 || until != t0+600 {
+		t.Fatalf("stored hold %d until %d", by, until)
+	}
+	if rec := post("8", `{"seat_id": 1}`); rec.Code != http.StatusConflict {
 		t.Fatalf("second claim: status %d body %s", rec.Code, rec.Body)
 	}
 }

@@ -14,11 +14,13 @@ CREATE TABLE IF NOT EXISTS invoices (
     created_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- held_by = 0: free. held_at: when the hold was taken (unix seconds).
+-- held_by: the session that holds the seat (0 when nobody does), until
+-- expires_at (unix seconds). The holder is always the server-set session,
+-- never an id the caller sends.
 CREATE TABLE IF NOT EXISTS seats (
-    id      INTEGER PRIMARY KEY,
-    held_by INTEGER NOT NULL DEFAULT 0,
-    held_at INTEGER NOT NULL DEFAULT 0
+    id         INTEGER PRIMARY KEY,
+    held_by    INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL DEFAULT 0
 );
 
 -- One row per ticket of an event (confirm_many). held_by: the session that

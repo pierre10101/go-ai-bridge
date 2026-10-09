@@ -15,6 +15,10 @@
 #   4. bridge-en -check passes and renders every slice exactly as the source
 #      fixture's golden English
 #   5. a go.mod that pins another bridge-en version is refused
+#   6. `bridge-en init` in the brand-new app writes AGENTS.md and the agent
+#      pointer files (docs only, no Go code) and never overwrites without -force
+#   7. `bridge-en pr-comment` and the pr-english action script (dry run) show a
+#      changed feature's intent next to its English diff
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SRC=$(pwd)
@@ -81,6 +85,26 @@ if [ "$MODE" = go-install ]; then
 fi
 [ "$(bridge-en -version)" = "bridge-en $VERSION" ]
 
+echo "== bridge-en init in the brand-new app: docs only, no Go code"
+INIT="$WORK/init-app"
+mkdir -p "$INIT" && cp go.mod "$INIT/"
+(cd "$INIT" && bridge-en init)
+got=$(cd "$INIT" && find . -type f ! -name go.mod | sed 's#^\./##' | LC_ALL=C sort | tr '\n' ' ')
+want=".cursor/rules/bridge-en.mdc .github/copilot-instructions.md AGENTS.md CLAUDE.md GEMINI.md "
+[ "$got" = "$want" ] || { echo "init wrote: $got; want: $want" >&2; exit 1; }
+if find "$INIT" -name '*.go' | grep -q .; then echo "init wrote Go code" >&2; exit 1; fi
+grep -q "go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v$VERSION" "$INIT/AGENTS.md"
+for f in .cursor/rules/bridge-en.mdc CLAUDE.md .github/copilot-instructions.md GEMINI.md; do
+  grep -q "Follow AGENTS.md" "$INIT/$f" || { echo "$f does not point to AGENTS.md" >&2; exit 1; }
+done
+echo "my notes" > "$INIT/CLAUDE.md"
+(cd "$INIT" && bridge-en init) | grep -q "kept      CLAUDE.md"
+[ "$(cat "$INIT/CLAUDE.md")" = "my notes" ] || { echo "init overwrote CLAUDE.md without -force" >&2; exit 1; }
+(cd "$INIT" && bridge-en init -force) | grep -q "overwrote CLAUDE.md"
+grep -q "Follow AGENTS.md" "$INIT/CLAUDE.md"
+echo "ok  init wrote $want(no Go code; kept existing files without -force)"
+bridge-en init . >/dev/null   # the app itself gets the docs too
+
 echo "== sqlc generate, go mod tidy"
 "$SQLC" generate
 go mod tidy >/dev/null 2>&1
@@ -125,5 +149,23 @@ if bridge-en -check features/claim_example/ 2>"$WORK/err"; then
 fi
 cat "$WORK/err"
 cp "$WORK/go.mod.keep" go.mod
+
+echo "== pr-comment: a changed feature's intent next to its English"
+git add -A >/dev/null && git -c user.name=smoke -c user.email=smoke@example.com commit -qm base
+BASE=$(git rev-parse HEAD)
+sed -i 's/^- F2: there is no valid session cookie (the session is 0): nothing is$/- F2: there is no valid session cookie (no cookie at all): nothing is/' features/claim_example/intent.md
+grep -q '(no cookie at all)' features/claim_example/intent.md
+sed -i 's/^# Claim example$/# Claim example (edited for the smoke test)/' features/claim_example/claim_example.en
+git add -A >/dev/null && git -c user.name=smoke -c user.email=smoke@example.com commit -qm change
+bridge-en pr-comment -base "$BASE" features/*/ > "$WORK/comment.md"
+head -n1 "$WORK/comment.md" | grep -qx '<!-- bridge-en:pr-english -->'
+grep -q '^### `features/claim_example`$' "$WORK/comment.md"
+grep -q '^+- F2: there is no valid session cookie (no cookie at all): nothing is$' "$WORK/comment.md"
+grep -q '^+# Claim example (edited for the smoke test)$' "$WORK/comment.md"
+if grep -q 'features/create_invoice' "$WORK/comment.md"; then echo "unchanged feature in the comment" >&2; exit 1; fi
+BRIDGE_EN_DRY_RUN=1 BRIDGE_EN_BASE="$BASE" BRIDGE_EN_FEATURES="features/*/" BRIDGE_EN_MAX=60000 \
+  "$SRC/.github/actions/pr-english/post.sh" > "$WORK/comment2.md"
+diff -u "$WORK/comment.md" "$WORK/comment2.md"
+echo "ok  pr-comment and pr-english/post.sh (dry run): $(wc -c < "$WORK/comment.md") chars"
 
 echo "smoke-app green: bridge-en $VERSION ($MODE)"

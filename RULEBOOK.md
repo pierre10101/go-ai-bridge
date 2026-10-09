@@ -24,6 +24,7 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Install and pin](#install-and-pin)
 - [App layout](#app-layout)
 - [Writing a slice](#writing-a-slice)
+- [Intent: I1-I3](#intent-i1-i3)
 - [Declarations: D1-D10](#declarations-d1-d10)
 - [Statements: S1-S11](#statements-s1-s11)
 - [Expressions: E1-E7](#expressions-e1-e7)
@@ -33,6 +34,8 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Conditional claim and state-transition rules](#conditional-claim-and-state-transition-rules)
 - [Hard limits](#hard-limits)
 - [The fixture app](#the-fixture-app)
+- [Agent instructions: bridge-en init](#agent-instructions-bridge-en-init)
+- [Review: the pull request comment](#review-the-pull-request-comment)
 
 ## Install and pin
 
@@ -46,17 +49,21 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.1.4
+go get github.com/pierre10101/go-ai-bridge@v0.2.0
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.4
-bridge-en -version                      # bridge-en 0.1.4
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.2.0
+bridge-en -version                      # bridge-en 0.2.0
 ```
+
+Then `bridge-en init` writes `AGENTS.md` and pointer files for AI agents
+into the app (documents only; see
+[Agent instructions](#agent-instructions-bridge-en-init)).
 
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.1.4
+require github.com/pierre10101/go-ai-bridge v0.2.0
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -67,12 +74,16 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.4   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.4
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
+
+On pull requests, the `pr-english` action comments each changed feature's
+intent next to its English (see
+[Review: the pull request comment](#review-the-pull-request-comment)).
 
 Without GitHub Actions: `go install …@v<version>` as above, or download
 `bridge-en_<version>_<os>_<arch>.tar.gz` and `SHA256SUMS` from the release and
@@ -86,12 +97,15 @@ and the app runs that same runtime: both come from the one module version in
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.4; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.4), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.2.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.2.0), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
-diff of every `.en` file, commit.
+diff of every `.en` file, commit. 0.2.0 is a breaking change: every slice
+needs an `intent.md` whose `## Failure cases` section is in the strict
+format and names exactly the F-IDs of `action.go` (I1-I3); the migration
+steps are in README.md, "0.1.x to 0.2.0".
 
 ## App layout
 
@@ -114,7 +128,7 @@ A slice:
 
 ```
 features/<slice>/
-  intent.md          why, inputs, outputs, failure cases F1..Fn  (write this FIRST)
+  intent.md          why, inputs, outputs, "## Failure cases" F1..Fn (I1-I3; write this FIRST)
   action.go          Route, Input, Output, F-IDs, Action, New, Handle (D1-D10, S1-S11)
   queries/*.sql      plain SQL with sqlc annotations (Q0-Q7)
   db/                sqlc-generated code (never edited by hand)
@@ -122,22 +136,102 @@ features/<slice>/
   <slice>.en         golden English (bridge-en -write), reviewed in the pull request
 ```
 
-`bridge-en -check features/*/` also cross-checks: the F-IDs of `intent.md`,
-`action.go` and `checks/` are the same set; every query in `queries/` is
-called (no dead SQL); the route is bound with the runtime's `httpx.Bind` over
-its `txn.DB`.
+`bridge-en -check features/*/` reads `intent.md` first (I1, I2) and refuses
+a slice whose F-IDs there differ from those of `action.go` (I3) before it
+checks anything else. Then it also cross-checks: every F-ID is covered by a
+check in `checks/`; every query in `queries/` is called (no dead SQL); the
+route is bound with the runtime's `httpx.Bind` over its `txn.DB`.
 
 ## Writing a slice
 
 1. Write `intent.md` with every failure case (F1..Fn) in English **before any
-   code**.
+   code**, in the I2 format: `- F<n>: <text>` under `## Failure cases`.
 2. Write `queries/*.sql` (Q0-Q7) and run `sqlc generate`.
 3. Write `action.go` inside D1-D10 / S1-S11.
 4. Write one check per F-ID in `checks/` (`func TestF<n>_...` that references
    `<slice>.F<n>`).
 5. Bind the route in `cmd/server/routes.go`.
-6. `bridge-en -write features/<slice>`; read the `.en` like a reviewer would;
-   commit it with the code.
+6. `bridge-en -check features/<slice>` after every edit; a refusal names the
+   rule to follow.
+7. `bridge-en -write features/<slice>` (it refuses while I1-I3 fail); read
+   the `.en` against `intent.md` like a reviewer would; commit it with the
+   code. Never edit a `.en` by hand.
+
+---
+
+## Intent: I1-I3
+
+`intent.md` is the request in plain English, written before the code. Most of
+it is free English for the reviewer (why, who, inputs, outputs, out of
+scope). bridge-en reads exactly one part of it, the failure cases, and holds
+the code to them. `-check` and `-write` read `intent.md` **before**
+`action.go` and stop at the first I1-I3 refusal; `-write` saves no English
+until they pass.
+
+### I1
+
+**intent first** - every slice has `intent.md`.
+
+Refused (`adapter/testdata/bad_intent/no_intent`):
+```
+testdata/bad_intent/no_intent/intent.md: refused: feature without intent.md is not in the allowed pattern list (I1 intent first). Write intent.md before any code: why, inputs, outputs and every failure case. Under the heading "## Failure cases", write one line per failure case, "- F<n>: <text>" (for example "- F1: the customer does not exist."), F-IDs in increasing order, each once; a long case continues on lines indented by two spaces; a slice with no failure case writes the single line "None."
+```
+
+### I2
+
+**failure cases** - exactly one heading `## Failure cases` (this text, level
+2). Up to the next heading, every non-blank line is:
+
+- an entry `- F<n>: <text>`: a dash, a space, the F-ID (`F1`, `F2`, ...,
+  no `F0`), a colon, a space, then the text;
+- a continuation of the entry above, indented by two spaces;
+- or, for a slice with no failure case, the single line `None.`
+
+F-IDs appear in increasing order, each once. Nowhere else in `intent.md` may
+a list item start with an F-ID (`- F1 ...`, `- **F1** ...`), so there is one
+place to read them; prose that mentions F1 is fine.
+
+```markdown
+## Failure cases
+- F1: the seat is held (by any session, this one included) and its hold
+  expires later than now, or the seat does not exist: nothing changed.
+- F2: there is no valid session cookie (the session is 0): nothing is
+  written.
+```
+
+The first refusal in a file carries the whole format; the others say
+`Expected "- F<n>: <text>" (the format is in the first refusal above)`.
+
+Refused:
+- the v0.1.4 style `- **F1** — the customer does not exist.` (`adapter/testdata/bad_intent/old_format`) -
+  `intent.md:23:1: refused: line "- **F1** — the customer does not exist." in "## Failure cases" is not in the allowed pattern list (I2 failure cases). Under the heading "## Failure cases", write one line per failure case, "- F<n>: <text>" ...`
+- no `## Failure cases` heading (`adapter/testdata/bad_intent/no_section`) -
+  `intent.md: refused: intent.md without the heading "## Failure cases" is not in the allowed pattern list (I2 failure cases). ...`, and for each F-ID list item elsewhere,
+  `intent.md:23:1: refused: failure case F1 outside "## Failure cases" ...`
+- `- F1 the customer does not exist.` (no colon), `F2` after `F3`, `F2`
+  twice, a prose line in the section (`adapter/testdata/bad_intent/malformed_entries`) -
+  `refused: line "- F1 the customer does not exist." in "## Failure cases" ...`,
+  `refused: failure case F2 after F3 ...`,
+  `refused: second failure case F2 (the first is on line 25) ...`,
+  `refused: line "Also anything else that goes wrong." in "## Failure cases" ...`
+- `## Failure Cases` (another spelling) - `refused: heading "## Failure Cases" ... The heading is exactly "## Failure cases". ...`;
+  a section with no entry and no `None.` - `refused: empty "## Failure cases" section ...`;
+  a second heading - `refused: second "## Failure cases" heading (the first is on line 21) ...`
+
+### I3
+
+**intent = code** - the F-IDs listed under `## Failure cases` are exactly
+the F-IDs `action.go` declares (D6). Each one missing on either side is
+refused by name, at its line, with both sets. And, as before, every F-ID is
+covered by a check in `checks/`: a `func TestF<n>_...` that references
+`<slice>.F<n>` (and runs the action against SQLite).
+
+Refused:
+- action.go declares F3, intent.md lists F1, F2 (`adapter/testdata/bad_intent/missing_id`) -
+  `testdata/bad_intent/missing_id/action.go:36:2: refused: failure case F3 that intent.md does not list is not in the allowed pattern list (I3 intent = code). intent.md lists F1, F2; action.go declares F1, F2, F3. Write the case in intent.md first ("- F3: <text>" under "## Failure cases"), or remove F3 from action.go`
+- intent.md lists F4, action.go declares F1-F3 (`adapter/testdata/bad_intent/extra_id`) -
+  `testdata/bad_intent/extra_id/intent.md:26:1: refused: failure case F4 that action.go does not declare is not in the allowed pattern list (I3 intent = code). intent.md lists F1, F2, F3, F4; action.go declares F1, F2, F3. Declare it in action.go (F4 = failure.New("F4", http.Status<Name>, "<message>")) and raise it with a guard, or remove it from intent.md`
+- an F-ID no check covers - `checks: no check covers F2 (I3 intent = code): add func TestF2_... in checks/ that references create_invoice.F2 and runs against real SQLite`
 
 ---
 
@@ -412,7 +506,7 @@ guards that mention the count may stay as extra guards (for example
 `claimed == 0 && <a read that explains why>`), next to the check.
 
 ```go
-claimed, err := a.q.ClaimSeat(ctx, db.ClaimSeatParams{HeldBy: in.PersonID, Now: in.Now, ID: in.SeatID})
+claimed, err := a.q.ClaimSeat(ctx, db.ClaimSeatParams{Session: in.Session, Now: in.Now, ID: in.SeatID})
 if err != nil {
 	return Output{}, err
 }
@@ -448,7 +542,7 @@ rolled back`. From `adapter/testdata/good/release_example/release_example.en`:
    Any change made in step 2 is rolled back.
 ...
 8. Check that:
-   - the found seat's `held_by` equals 0 and the found seat's `held_at` equals 0 ("nobody holds the seat any more")
+   - the found seat's `held_by` equals 0 and the found seat's `expires_at` equals 0 ("nobody holds the seat any more")
    If any of these is false, it is a bug: stop with HTTP 500 Internal Server Error.
    The write in step 2 is rolled back.
 ```
@@ -457,7 +551,7 @@ Refused:
 - no `!= 1` guard - `refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check)`
 - `claimed > 0` - `refused: comparison claimed > 0 on a claim's changed-row count is not in the allowed pattern list (S10 claim check)`
 - only `if claimed == 0 && claimed != 1 { ... }` (`adapter/testdata/bad/claim_compound_check`) -
-  `refused: claim whose changed-row count is checked only inside a compound condition (line 56) is not in the allowed pattern list (S10 claim check). The check is a guard of its own whose entire condition is claimed != 1: if claimed != 1 { return Output{}, F<n> }. Inside &&, || or ! it does not stop every wrong count (claimed == 0 && claimed != 1 stops only when no row changed, so a claim that changed too many rows passes); such guards may stay as extra guards`
+  `refused: claim whose changed-row count is checked only inside a compound condition (line 55) is not in the allowed pattern list (S10 claim check). The check is a guard of its own whose entire condition is claimed != 1: if claimed != 1 { return Output{}, F<n> }. Inside &&, || or ! it does not stop every wrong count (claimed == 0 && claimed != 1 stops only when no row changed, so a claim that changed too many rows passes); such guards may stay as extra guards`
 
 ### S11
 
@@ -638,12 +732,12 @@ itself), said in the Q6 boundary words.
 
 ```sql
 -- name: SeatHolder :one
-SELECT held_by, held_at FROM seats WHERE id = sqlc.arg(id) AND held_at <= sqlc.arg(now) - 600;
+SELECT held_by, expires_at FROM seats WHERE id = sqlc.arg(id) AND expires_at > sqlc.arg(now);
 ```
 ```go
 seat, err := a.q.SeatHolder(ctx, db.SeatHolderParams{ID: in.SeatID, Now: in.Now})
 ```
-English: `Read: find a seat whose `id` is the request's `seat_id` and `held_at` is 10 minutes or more before the current time (query `SeatHolder` in queries/seat_after.sql); if several match, the first row returned is used. Call it the found seat.` / `If no seat matches or the query fails, stop with HTTP 500 Internal Server Error.` (`TestClockComparisonInReads`)
+English: `Read: find a seat whose `id` is the request's `seat_id` and `expires_at` is later than the current time (query `SeatHolder` in queries/seat_after.sql); if several match, the first row returned is used. Call it the found seat.` / `If no seat matches or the query fails, stop with HTTP 500 Internal Server Error.` (`TestClockComparisonInReads`)
 
 Refused: `SELECT * ...` - `refused: SELECT * is not in the allowed pattern list`; `... JOIN ...` - `refused: JOIN is not in the allowed pattern list`; `expires_at > sqlc.arg(now) - 600` with `Now: in.Cutoff` (`adapter/testdata/bad/read_clock_source`) - `refused: comparison expires_at > sqlc.arg(now) - 600 in query FindLiveHold, whose value in.Cutoff is not the server-set current time is not in the allowed pattern list (Q2 one row). ...`
 
@@ -679,18 +773,22 @@ Refused: `... LIMIT ? OFFSET ?` - `refused: OFFSET ...`; a write query in a GET 
 ```sql
 -- name: ClaimSeat :execrows
 UPDATE seats
-SET held_by = sqlc.arg(held_by), held_at = sqlc.arg(now)
-WHERE id = sqlc.arg(id) AND (held_by = 0 OR held_at <= sqlc.arg(now) - 600);
+SET held_by = sqlc.arg(session), expires_at = sqlc.arg(now) + 600
+WHERE id = sqlc.arg(id) AND (held_by = 0 OR expires_at <= sqlc.arg(now));
 ```
+
+The holder is the server-set session (T2), never an id from the request
+body, and the hold is stored as the time it ends (`expires_at`), so every
+read and claim compares that column with `now` directly.
 
 - `SET <col> = <value>, ...`; `WHERE <cond> [AND <cond>]...`, where `<cond>` is
   `<col> = <> < <= > >= <value>`, or one parenthesised `(<cond> OR <cond> ...)` group;
 - at least one `<col> = <parameter>` outside the group (which rows);
-- a parameter may be plus or minus a whole number (`sqlc.arg(now) - 600`);
+- a parameter may be plus or minus a whole number (`sqlc.arg(now) + 600`);
 - `:execrows` only, no `RETURNING`; the action checks the count (S10, or S11
   for a claim over a Q7 IN list).
 
-English: ``2. Claim: in table `seats`, set `held_by` = the request's `person_id` and `held_at` = the current time on each seat whose `id` is the request's `seat_id` and (`held_by` is 0 or `held_at` is 10 minutes or more before the current time) at that moment (query `ClaimSeat` in queries/claim_seat.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same seat.``
+English: ``2. Claim: in table `seats`, set `held_by` = the session from the cookie and `expires_at` = 10 minutes after the current time on each seat whose `id` is the request's `seat_id` and (`held_by` is 0 or `expires_at` is no later than the current time) at that moment (query `ClaimSeat` in queries/claim_seat.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same seat.``
 
 **Comparisons with the current time.** Next to the current time (T1) a
 comparison is said as a distance, and every phrase names its boundary: a
@@ -703,19 +801,19 @@ than" it, and neither "earlier than" nor "later than" it.
 `TestClockComparisonWithoutOffset` pin these lines, and
 `TestClockComparisonInReads` pins the same words in a Q1 count and a Q2
 one-row read (where the value must be the clock input `in.Now` itself);
-the claim checks prove the `<=` boundary against SQLite (a hold taken 599
-seconds earlier blocks the seat, one taken exactly 600 seconds earlier does
-not), and the confirm_many checks prove the read's `expires_at <=
+the claim checks prove the claim's `expires_at <= sqlc.arg(now)` against
+SQLite (a hold that expires one second after now blocks the seat, one that
+expires exactly now does not), and the confirm_many checks prove the read's `expires_at <=
 sqlc.arg(now)` at the boundary second (a hold ending exactly now is counted,
 one second earlier it is not).
 
 | SQL | English |
 |---|---|
-| `held_at <= sqlc.arg(now) - 600` | `` `held_at` is 10 minutes or more before the current time `` |
-| `held_at < sqlc.arg(now) - 600` | `` `held_at` is more than 10 minutes before the current time `` |
-| `held_at > sqlc.arg(now) - 600` | `` `held_at` is later than 10 minutes before the current time `` |
-| `held_at >= sqlc.arg(now) - 600` | `` `held_at` is no earlier than 10 minutes before the current time `` |
-| `held_at = sqlc.arg(now) - 600` / `<>` | `` `held_at` is exactly 10 minutes before the current time `` / `is not exactly` |
+| `seen_at <= sqlc.arg(now) - 600` | `` `seen_at` is 10 minutes or more before the current time `` |
+| `seen_at < sqlc.arg(now) - 600` | `` `seen_at` is more than 10 minutes before the current time `` |
+| `seen_at > sqlc.arg(now) - 600` | `` `seen_at` is later than 10 minutes before the current time `` |
+| `seen_at >= sqlc.arg(now) - 600` | `` `seen_at` is no earlier than 10 minutes before the current time `` |
+| `seen_at = sqlc.arg(now) - 600` / `<>` | `` `seen_at` is exactly 10 minutes before the current time `` / `is not exactly` |
 | `ends_at >= sqlc.arg(now) + 600` | `` `ends_at` is 10 minutes or more after the current time `` |
 | `ends_at > sqlc.arg(now) + 600` | `` `ends_at` is more than 10 minutes after the current time `` |
 | `ends_at < sqlc.arg(now) + 600` | `` `ends_at` is earlier than 10 minutes after the current time `` |
@@ -730,8 +828,8 @@ Refused:
 - `UPDATE seats SET held_by = ?;` - `refused: end of statement ... Expected WHERE after SET (a claim names its rows and its condition; an UPDATE without WHERE changes every row)`
 - `... RETURNING id` - `refused: RETURNING on an UPDATE is not in the allowed pattern list (query ClaimSeat)`
 - `-- name: ClaimSeat :one` - `refused: query annotation :one on a claim update is not in the allowed pattern list (Q0 query annotation)`
-- `WHERE held_by = 0 OR held_at <= ...` (no parentheses) - `refused: OR in WHERE is not in the allowed pattern list (query ClaimSeat)`
-- `SET held_at = ? WHERE id = ? AND held_at <= ?` - `refused: second bare ? for column held_at ... name this one with sqlc.arg(<name>)`
+- `WHERE held_by = 0 OR expires_at <= ...` (no parentheses) - `refused: OR in WHERE is not in the allowed pattern list (query ClaimSeat)`
+- `SET expires_at = ? WHERE id = ? AND expires_at <= ?` - `refused: second bare ? for column expires_at ... name this one with sqlc.arg(<name>)`
 
 ### Q7
 
@@ -784,9 +882,8 @@ Refused (`adapter/testdata/bad/list_shapes`):
 
 ```go
 type Input struct {
-	SeatID   int64 `json:"seat_id"`
-	PersonID int64 `json:"person_id"`
-	Now      int64 `json:"now" clock:"now"`
+	SeatID int64 `json:"seat_id"`
+	Now    int64 `json:"now" clock:"now"`
 }
 ```
 
@@ -801,7 +898,7 @@ English:
 The action also takes this value, which the caller does not send:
 - `now`: set by the server to the current time when the request arrives, in whole seconds since 1970-01-01 UTC; the caller does not send it, and a request that does is answered with HTTP 400 below.
 ```
-and in steps: `` `held_at` is 10 minutes or more before the current time `` (see Q6 for every operator; the same words in a Q1 or Q2 read, whose parameter must be bound to `in.Now` itself).
+and in steps: `` `expires_at` is no later than the current time `` (see Q6 for every operator; the same words in a Q1 or Q2 read, whose parameter must be bound to `in.Now` itself).
 
 Refused:
 - `import "time"` - `refused: import "time" is not in the allowed pattern list (T1 time is passed in). Logic never reads the clock. ...`
@@ -811,15 +908,21 @@ Refused:
 ### T2
 
 **session is passed in** - the caller's identity is a server-set input, like
-the time. At most one Input field, `int64` or `string`, tagged
+the time. At most one Input field, `string` or `int64`, tagged
 `server:"session"`:
 
 ```go
 type Input struct {
-	SeatID  int64 `json:"seat_id"`
-	Session int64 `json:"session" server:"session"`
+	SeatID  int64  `json:"seat_id"`
+	Session string `json:"session" server:"session"`
 }
 ```
+
+Who the caller is comes only from this field. Never take an identity from
+the request body (`person_id`, `user_id`, `owner_id`): the caller can send
+any value, so a claim or a check written with it lets anyone act in someone
+else's name. A text session's guard is `if in.Session == "" { return
+Output{}, F<n> }`; an `int64` session's is `if in.Session <= 0 { ... }`.
 
 `httpx.Bind` (`runtime/httpx`) sets it from the cookie
 `httpx.SessionCookie`, which is always `bridge_session`:
@@ -827,9 +930,9 @@ type Input struct {
 - exactly one `bridge_session` cookie whose value is a whole number from 1
   up, in digits only (`int64`), or 1 to 128 letters, digits, `-`, `_` or `.`
   (`string`): the field is that value;
-- no such cookie, more than one, or any other value: the field is 0 (the
-  empty text), and the action runs, so its own guard raises its failure
-  (`if in.Session <= 0 { return Output{}, F1 }`);
+- no such cookie, more than one, or any other value: the field is the
+  empty text (0 for `int64`), and the action runs, so its own guard raises its failure
+  (`if in.Session == "" { return Output{}, F1 }`, or `<= 0` for `int64`);
 - a request whose body or query string sends `session`, in any letter case,
   is answered with HTTP 400 `bad_request` and the action does not run.
 
@@ -839,8 +942,11 @@ it (for example when it serves its web page) with an unguessable value,
 `HttpOnly`, `SameSite=Lax` and, over HTTPS, `Secure`. Checks call `Handle`
 with any session they like.
 
-English (`adapter/testdata/good/release_example/release_example.en`), apart
-from the fields the caller sends:
+English for an `int64` session (`adapter/testdata/good/release_example/release_example.en`;
+a `string` session, as in `confirm_many.en`, says `its value when that is 1
+to 128 letters, digits, '-', '_' or '.', or the empty text when ...` and, in
+steps, `If the session from the cookie equals the text ""`), apart from the
+fields the caller sends:
 ```
 The request body is one JSON object with this field and no others:
 - `seat_id`: a whole number.
@@ -869,22 +975,22 @@ changed nothing, is allowed.
 
 Refused (`adapter/testdata/bad/check_then_write`):
 ```go
-holds, err := a.q.SeatHolds(ctx, in.SeatID, in.PersonID) // SELECT COUNT(*) FROM seats ...
+holds, err := a.q.SeatHolds(ctx, in.SeatID, in.Session) // SELECT COUNT(*) FROM seats ...
 ...
 if holds != 0 {
 	return Output{}, F1
 }
-claimed, err := a.q.ClaimSeat(ctx, ...)                   // UPDATE seats ...
+claimed, err := a.q.ClaimSeat(ctx, ...)                  // UPDATE seats ...
 ```
 `refused: write to table seats after reading it in step 2 (check-then-write) is not in the allowed pattern list (W1 no check-then-write). Do not read a row and then write it: another call can change it in between. Put the condition into the write itself ...`
 
 Allowed (claim first, explain after):
 ```go
-if claimed == 0 && holder.HeldBy == in.PersonID {   // holder read after the claim
+if claimed == 0 && holder.HeldBy == in.Session {   // holder read after the claim
 	return Output{}, F2
 }
 ```
-English: ``If no seat was changed in step 2 and the found seat's `held_by` equals the request's `person_id`, stop with F2 ...``
+English: ``If no seat was changed in step 2 and the found seat's `held_by` equals the session from the cookie, stop with F2 ...``
 
 ---
 
@@ -966,12 +1072,15 @@ a hold, approving a request, consuming a one-time token. The seat hold in
 `adapter/testdata/good/claim_example` is only an example.
 
 1. **Pass the current time and the session in** (T1, T2). No clock inside
-   logic, and the caller never names who they are in the body. A time
-   condition is written next to the server-set `now`, and the English names
-   its boundary exactly (Q6 table): `held_at <= sqlc.arg(now) - 600` is
-   "`held_at` is 10 minutes or more before the current time", so a hold taken
-   exactly 600 seconds ago has expired and one taken 599 seconds ago has not.
-   Checks inject the time and test both sides of the boundary.
+   logic, and the caller never names who they are in the body: the holder or
+   owner written by a claim is `in.Session` (`server:"session"`), never a
+   `person_id` or `user_id` input. Store when a hold ends (`SET expires_at =
+   sqlc.arg(now) + 600`) and compare that column with the server-set `now`;
+   the English names the boundary exactly (Q6 table): `expires_at <=
+   sqlc.arg(now)` is "`expires_at` is no later than the current time", so a
+   hold whose `expires_at` is exactly now has expired and one that expires a
+   second later has not. Checks inject the time and test both sides of the
+   boundary.
 2. **Check and write in one statement** (Q6 + S10 + W1). One `UPDATE`
    changes the row only if it is in the expected state, and the action stops
    unless exactly one row changed. The English says the condition holds "at
@@ -980,12 +1089,11 @@ a hold, approving a request, consuming a one-time token. The seat hold in
 3. **Write the failure cases before the code**, in `intent.md`, each in plain
    English with its exact boundary. For a transition, consider at least:
    - **not in the expected state** - for example the resource is held by
-     someone else and the hold was taken less than the hold time before now;
-   - **expired** - the hold, token or offer was taken the hold time or more
-     before now;
+     someone else and the hold expires later than now;
+   - **expired** - the hold, token or offer expires now or earlier;
    - **already done** - the same transition was applied before (confirmed
      twice, released twice);
-   - **someone else's** - the row belongs to another person;
+   - **someone else's** - the row belongs to another session;
    - **no such row**.
 
    Each becomes an F-ID raised by a guard after the claim (`claimed == 0 && ...`
@@ -1024,3 +1132,69 @@ golden `<slice>.en`) and `bad/` (refused, with `want.err`) instead of
 `features/`. The go command ignores `testdata`, so `bridge-en` only reads it;
 `scripts/smoke-app.sh` copies it into a new module, generates the `db/`
 packages with sqlc and runs its checks for real. bridge-en itself ships no app.
+
+## Agent instructions: bridge-en init
+
+```sh
+bridge-en init            # in the app's root; or: bridge-en init <dir>
+bridge-en init -force     # overwrite the files below with this version's text
+```
+
+writes documents only, never code, into the directory:
+
+| File | For | Content |
+|---|---|---|
+| `AGENTS.md` | every agent (the cross-tool standard) and people | the workflow: install by the go.mod pin, intent first, `-check` after every edit, `-write` and read the `.en` against the intent, never edit `.en`, the server's time and session passed in, claims, a thin UI, countdowns from the server's `now`/`expires_at`, errors on `error.id`, pull requests only, and an example feature |
+| `.cursor/rules/bridge-en.mdc` | Cursor (`alwaysApply: true`) | "follow AGENTS.md" and the five rules that matter most |
+| `CLAUDE.md` | Claude Code | the same pointer |
+| `.github/copilot-instructions.md` | GitHub Copilot | the same pointer |
+| `GEMINI.md` | Gemini CLI | the same pointer |
+
+AGENTS.md is the single source of truth; the pointer files only send the
+agent to it. An existing file is kept (`kept AGENTS.md (exists; bridge-en
+init -force overwrites it)`) unless `-force`. The text is embedded in the
+binary, so it is the text of the version installed, and the example feature
+in AGENTS.md is tested to pass I1-I3 and render (`TestAgentsSkeletonRenders`).
+
+## Review: the pull request comment
+
+```sh
+bridge-en pr-comment -base <base-sha> [-head HEAD] [-max 60000] features/*/
+```
+
+prints a markdown comment: for every feature directory with a change between
+`<base>...<head>`, the files that changed, its `intent.md` (in full; its diff
+when the pull request changes it) and the diff of its `<slice>.en` ("unchanged"
+when the code changed but the English did not). A reviewer reads what was
+asked next to what the code does. The comment starts with
+`<!-- bridge-en:pr-english -->`, never exceeds `-max` characters (large
+blocks are cut at a line with a note; features that do not fit are named),
+and fences each block so its content cannot break the markdown.
+
+The `pr-english` action posts it, updating its one comment in place:
+
+```yaml
+on: pull_request
+jobs:
+  english:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24.x" }
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.2.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.2.0
+        # with:
+        #   features: "features/*/"   # default
+        #   max-chars: "60000"        # default
+```
+
+It writes the same text to the job summary. On a pull request from a fork,
+GitHub gives the workflow a read-only token, so the action does not comment
+(it says so in a notice); the job summary has the text. The action needs no
+permission but `pull-requests: write` (and `contents: read` to check out).
+

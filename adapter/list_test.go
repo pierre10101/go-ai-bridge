@@ -44,8 +44,8 @@ func TestStrictClaimCheck(t *testing.T) {
 	const check = "\tif claimed != 1 {\n\t\treturn Output{}, F1\n\t}\n"
 	refused := map[string]struct{ to, want string }{
 		"and":       {"\tif claimed == 0 && claimed != 1 {\n\t\treturn Output{}, F1\n\t}\n", "action.go:46:2: refused: claim whose changed-row count is checked only inside a compound condition (line 54) is not in the allowed pattern list (S10 claim check). The check is a guard of its own whose entire condition is claimed != 1"},
-		"or":        {"\tif claimed != 1 || in.PersonID == 0 {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 54)"},
-		"nested":    {"\tif in.PersonID > 0 && (claimed != 1 || in.SeatID == 0) {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 54)"},
+		"or":        {"\tif claimed != 1 || in.Session == 0 {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 54)"},
+		"nested":    {"\tif in.Session > 0 && (claimed != 1 || in.SeatID == 0) {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count is checked only inside a compound condition (line 54)"},
 		"negated":   {"\tif !(claimed == 1) {\n\t\treturn Output{}, F1\n\t}\n", "refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check)"},
 		"two":       {"\tif claimed != 2 {\n\t\treturn Output{}, F1\n\t}\n", "refused: comparison claimed != 2 on a claim's changed-row count"},
 		"in a post": {"\tassert.Pre(true, \"x\")\n", "refused: claim whose changed-row count no guard checks"},
@@ -60,8 +60,8 @@ func TestStrictClaimCheck(t *testing.T) {
 	}
 	accepted := map[string]struct{ to, want string }{
 		"parenthesised": {"\tif (claimed != 1) {\n\t\treturn Output{}, F1\n\t}\n", "3. If (not exactly one seat was changed in step 2), stop with F1"},
-		"extra compound guard": {"\tif claimed == 0 && in.PersonID == 7 {\n\t\treturn Output{}, F2\n\t}\n\tif claimed == 0 || claimed != 1 {\n\t\treturn Output{}, F1\n\t}\n" + check,
-			"3. If no seat was changed in step 2 and the request's `person_id` equals 7, stop with F2"},
+		"extra compound guard": {"\tif claimed == 0 && in.Session == 7 {\n\t\treturn Output{}, F2\n\t}\n\tif claimed == 0 || claimed != 1 {\n\t\treturn Output{}, F1\n\t}\n" + check,
+			"3. If no seat was changed in step 2 and the session from the cookie equals 7, stop with F2"},
 	}
 	for name, tc := range accepted {
 		t.Run("ok/"+name, func(t *testing.T) {

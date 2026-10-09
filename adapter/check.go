@@ -15,19 +15,28 @@ import (
 )
 
 var (
-	intentFIDRe = regexp.MustCompile(`^\s*[-*]\s+\**(F[1-9][0-9]*)\b`)
-	testFIDRe   = regexp.MustCompile(`^Test((?:F[1-9][0-9]*)+)_`)
-	oneFIDRe    = regexp.MustCompile(`F[1-9][0-9]*`)
+	testFIDRe = regexp.MustCompile(`^Test((?:F[1-9][0-9]*)+)_`)
+	oneFIDRe  = regexp.MustCompile(`F[1-9][0-9]*`)
 )
 
-// Check is what CI runs per slice: render (refusing unrenderable code),
-// compare with the committed golden .en file, and enforce the rulebook
-// cross-checks: intent.md F-IDs = action F-IDs = F-IDs covered by checks/
-// (named TestF<n>_ AND referencing <pkg>.F<n>), no dead SQL, and the route
-// is served through httpx.Bind over txn.DB (whose behaviour the English describes).
+// Check is what CI runs per slice. Intent first: intent.md exists and its
+// "## Failure cases" section is in the strict format (I1, I2), before
+// action.go is read; then action.go renders (refusing unrenderable code) and
+// declares exactly the F-IDs intent.md lists (I3). Only then: compare with the
+// committed golden .en file and enforce the other cross-checks: every F-ID is
+// covered by checks/ (named TestF<n>_ AND referencing <pkg>.F<n>), no dead
+// SQL, and the route is served through httpx.Bind over txn.DB (whose
+// behaviour the English describes).
 func Check(dir string) error {
+	intent, err := ParseIntent(dir)
+	if err != nil {
+		return err
+	}
 	f, err := ParseAction(dir)
 	if err != nil {
+		return err
+	}
+	if err := checkIntentMatches(intent, f); err != nil {
 		return err
 	}
 	got, err := Render(dir)
@@ -48,7 +57,6 @@ func Check(dir string) error {
 	for _, fc := range f.Failures {
 		declared[fc.ID] = true
 	}
-	errs = append(errs, checkIntent(dir, declared)...)
 	errs = append(errs, checkCoverage(dir, f.Package, declared)...)
 	used := map[string]bool{}
 	for _, c := range f.Queries {
@@ -63,30 +71,6 @@ func Check(dir string) error {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
-}
-
-func checkIntent(dir string, declared map[string]bool) []error {
-	path := filepath.Join(dir, "intent.md")
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return []error{fmt.Errorf("%s: intent.md is required", path)}
-	}
-	var errs []error
-	inIntent := map[string]bool{}
-	for i, line := range strings.Split(string(src), "\n") {
-		if m := intentFIDRe.FindStringSubmatch(line); m != nil {
-			inIntent[m[1]] = true
-			if !declared[m[1]] {
-				errs = append(errs, fmt.Errorf("%s:%d: intent declares %s but action.go has no %s", path, i+1, m[1], m[1]))
-			}
-		}
-	}
-	for _, id := range sortedKeys(declared) {
-		if !inIntent[id] {
-			errs = append(errs, fmt.Errorf("%s: action.go declares %s but intent.md does not list it", path, id))
-		}
-	}
-	return errs
 }
 
 // checkCoverage: an F-ID is covered by a check named TestF<n>_... whose body
@@ -137,7 +121,7 @@ func checkCoverage(dir, pkg string, declared map[string]bool) []error {
 	}
 	for _, id := range sortedKeys(declared) {
 		if !covered[id] {
-			errs = append(errs, fmt.Errorf("%s: no check covers %s (add func Test%s_... in checks/ that references %s.%s)",
+			errs = append(errs, fmt.Errorf("%s: no check covers %s (I3 intent = code): add func Test%s_... in checks/ that references %s.%s and runs against real SQLite",
 				filepath.Join(dir, "checks"), id, id, pkg, id))
 		}
 	}

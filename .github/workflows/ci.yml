@@ -45,6 +45,8 @@ jobs:
         run: ./scripts/smoke-app.sh --go-install
 
   en-comment:
+    # The same mechanism apps use: bridge-en pr-comment, posted by the
+    # pr-english action, over the fixture slices. One comment, updated in place.
     if: github.event_name == 'pull_request'
     needs: ci
     runs-on: ubuntu-latest
@@ -55,45 +57,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Comment .en diff on the PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+      - name: Build bridge-en from this checkout
         run: |
           set -euo pipefail
-          MARKER='<!-- bridge-en-diff -->'
-          SHORT="${BASE_SHA:0:7}"
-          # GitHub issue comment body limit is 65536; leave headroom for marker/wrapping
-          MAX_DIFF_CHARS=60000
-
-          # git diff exits 1 when files differ; capture output either way
-          set +e
-          diff_out=$(git diff --no-ext-diff --unified=3 "${BASE_SHA}"...HEAD -- 'adapter/testdata/good/**/*.en')
-          set -e
-
-          if [ -z "${diff_out}" ]; then
-            body=$(printf '%s\n\nNo `.en` file changes in this PR (compared to `%s`).' "${MARKER}" "${SHORT}")
-          else
-            trunc_note=""
-            if [ "${#diff_out}" -gt "${MAX_DIFF_CHARS}" ]; then
-              diff_out="${diff_out:0:${MAX_DIFF_CHARS}}"
-              trunc_note=$(printf '\n\n> **Note:** Diff truncated for the GitHub comment size limit (~65k). See the full `.en` changes under **Files changed**.')
-            fi
-            body=$(printf '%s\n\nGolden English (`adapter/testdata/good/**/*.en`) changes vs base `%s`:\n\n```diff\n%s\n```%s' "${MARKER}" "${SHORT}" "${diff_out}" "${trunc_note}")
-          fi
-
-          # Idempotent: update existing bot comment with marker, else create
-          existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-            --jq ".[] | select(.user.type == \"Bot\" and (.body | contains(\"${MARKER}\"))) | .id" \
-            | head -n1 || true)
-
-          payload=$(jq -n --arg body "$body" '{body: $body}')
-          if [ -n "${existing}" ]; then
-            echo "$payload" | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input -
-            echo "Updated comment ${existing}"
-          else
-            echo "$payload" | gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input -
-            echo "Created new .en diff comment"
-          fi
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -o "$RUNNER_TEMP/bin/bridge-en" ./cmd/bridge-en
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Comment intent and English of the changed fixture slices
+        uses: ./.github/actions/pr-english
+        with:
+          features: "adapter/testdata/good/*/"

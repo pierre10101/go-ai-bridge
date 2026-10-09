@@ -11,30 +11,31 @@ import (
 // compares a column with the current time minus an offset, for all four
 // operators, through the whole pipeline (SQL parser, claim rendering). Each
 // phrase names the boundary in so many words, so no reader can take
-// "held_at <= now - 600" (held 10 minutes or more ago) for "within the last
-// 10 minutes". The claim checks (testdata/good/claim_example/checks), run by
-// scripts/smoke-app.sh, prove the <= boundary against SQLite: 599 seconds
-// later the hold still blocks, 600 seconds later it does not.
+// "col <= now - 600" (10 minutes or more ago) for "within the last 10
+// minutes". The fixture itself compares with no offset (expires_at <= now);
+// the claim checks (testdata/good/claim_example/checks), run by
+// scripts/smoke-app.sh, prove that boundary against SQLite: a hold that
+// expires one second after now still blocks, one that expires now does not.
 func TestClockComparisonWording(t *testing.T) {
 	const fixture = "testdata/good/claim_example"
 	sql, err := os.ReadFile(filepath.Join(fixture, "queries", "claim_seat.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	const cond = "held_at <= sqlc.arg(now) - 600"
+	const cond = "expires_at <= sqlc.arg(now)"
 	if !strings.Contains(string(sql), cond) {
 		t.Fatalf("fixture no longer contains %q", cond)
 	}
 	for _, tc := range []struct{ op, want string }{
-		{"<=", "`held_at` is 10 minutes or more before the current time"},
-		{"<", "`held_at` is more than 10 minutes before the current time"},
-		{">", "`held_at` is later than 10 minutes before the current time"},
-		{">=", "`held_at` is no earlier than 10 minutes before the current time"},
+		{"<=", "`expires_at` is 10 minutes or more before the current time"},
+		{"<", "`expires_at` is more than 10 minutes before the current time"},
+		{">", "`expires_at` is later than 10 minutes before the current time"},
+		{">=", "`expires_at` is no earlier than 10 minutes before the current time"},
 	} {
 		t.Run(tc.op, func(t *testing.T) {
 			dir := filepath.Join(moduleTempDir(t), "claim_example")
 			copyDir(t, fixture, dir)
-			mutated := strings.Replace(string(sql), cond, "held_at "+tc.op+" sqlc.arg(now) - 600", 1)
+			mutated := strings.Replace(string(sql), cond, "expires_at "+tc.op+" sqlc.arg(now) - 600", 1)
 			if err := os.WriteFile(filepath.Join(dir, "queries", "claim_seat.sql"), []byte(mutated), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -100,17 +101,17 @@ func TestClockComparisonWithoutOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ op, want string }{
-		{"<=", "`held_at` is no later than the current time"},
-		{"<", "`held_at` is earlier than the current time"},
-		{">", "`held_at` is later than the current time"},
-		{">=", "`held_at` is no earlier than the current time"},
-		{"=", "`held_at` is exactly the current time"},
-		{"<>", "`held_at` is not exactly the current time"},
+		{"<=", "`expires_at` is no later than the current time"},
+		{"<", "`expires_at` is earlier than the current time"},
+		{">", "`expires_at` is later than the current time"},
+		{">=", "`expires_at` is no earlier than the current time"},
+		{"=", "`expires_at` is exactly the current time"},
+		{"<>", "`expires_at` is not exactly the current time"},
 	} {
 		t.Run(tc.op, func(t *testing.T) {
 			dir := filepath.Join(moduleTempDir(t), "claim_example")
 			copyDir(t, fixture, dir)
-			mutated := strings.Replace(string(sql), "held_at <= sqlc.arg(now) - 600", "held_at "+tc.op+" sqlc.arg(now)", 1)
+			mutated := strings.Replace(string(sql), "expires_at <= sqlc.arg(now)", "expires_at "+tc.op+" sqlc.arg(now)", 1)
 			if err := os.WriteFile(filepath.Join(dir, "queries", "claim_seat.sql"), []byte(mutated), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -135,7 +136,7 @@ func TestClockComparisonWithoutOffset(t *testing.T) {
 	}
 	dir := filepath.Join(moduleTempDir(t), "claim_example")
 	copyDir(t, fixture, dir)
-	mutated := strings.Replace(string(src), "out.HeldBy == in.PersonID,", "out.HeldBy == in.PersonID && out.HeldAt <= in.Now,", 1)
+	mutated := strings.Replace(string(src), "out.Now == in.Now,", "out.Now <= in.Now,", 1)
 	if err := os.WriteFile(filepath.Join(dir, "action.go"), []byte(mutated), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ func TestClockComparisonWithoutOffset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "the answer's `held_at` is no later than the current time"; !strings.Contains(got, want) {
+	if want := "the answer's `now` is no later than the current time"; !strings.Contains(got, want) {
 		t.Fatalf("want %q in:\n%s", want, got)
 	}
 }
@@ -158,7 +159,7 @@ func TestClockComparisonGoesThroughSQL(t *testing.T) {
 	}
 	dir := filepath.Join(moduleTempDir(t), "claim_example")
 	copyDir(t, fixture, dir)
-	mutated := strings.Replace(string(sql), "held_at <= sqlc.arg(now) - 600", "held_at >= sqlc.arg(now) + 3600", 1)
+	mutated := strings.Replace(string(sql), "expires_at <= sqlc.arg(now)", "expires_at >= sqlc.arg(now) + 3600", 1)
 	if err := os.WriteFile(filepath.Join(dir, "queries", "claim_seat.sql"), []byte(mutated), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +167,7 @@ func TestClockComparisonGoesThroughSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "`held_at` is 1 hour or more after the current time"; !strings.Contains(got, want) {
+	if want := "`expires_at` is 1 hour or more after the current time"; !strings.Contains(got, want) {
 		t.Fatalf("want %q in:\n%s", want, got)
 	}
 }
@@ -242,13 +243,13 @@ func TestClockComparisonInReads(t *testing.T) {
 	})
 	t.Run("Q2 one row", func(t *testing.T) {
 		got, err := mutate(t, releaseFixture,
-			[3]string{"queries/seat_after.sql", "SELECT held_by, held_at FROM seats WHERE id = ?;", "SELECT held_by, held_at FROM seats WHERE id = sqlc.arg(id) AND held_at <= sqlc.arg(now) - 600;"},
+			[3]string{"queries/seat_after.sql", "SELECT held_by, expires_at FROM seats WHERE id = ?;", "SELECT held_by, expires_at FROM seats WHERE id = sqlc.arg(id) AND expires_at > sqlc.arg(now);"},
 			[3]string{"", "Session int64 `json:\"session\" server:\"session\"`", "Session int64 `json:\"session\" server:\"session\"`\n\tNow     int64 `json:\"now\" clock:\"now\"`"},
 			[3]string{"", "a.q.SeatHolder(ctx, in.SeatID)", "a.q.SeatHolder(ctx, db.SeatHolderParams{ID: in.SeatID, Now: in.Now})"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := "Read: find a seat whose `id` is the request's `seat_id` and `held_at` is 10 minutes or more before the current time (query `SeatHolder`"; !strings.Contains(got, want) {
+		if want := "Read: find a seat whose `id` is the request's `seat_id` and `expires_at` is later than the current time (query `SeatHolder`"; !strings.Contains(got, want) {
 			t.Fatalf("want %q in:\n%s", want, got)
 		}
 	})

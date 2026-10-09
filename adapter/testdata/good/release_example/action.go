@@ -67,6 +67,6 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	}
 
 	out := Output{SeatID: in.SeatID}
-	assert.Post(seat.HeldBy == 0 && seat.HeldAt == 0, "nobody holds the seat any more")
+	assert.Post(seat.HeldBy == 0 && seat.ExpiresAt == 0, "nobody holds the seat any more")
 	return out, nil
 }

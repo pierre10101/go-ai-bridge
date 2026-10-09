@@ -1,0 +1,47 @@
+name: bridge-en PR English
+description: >-
+  Comment on a pull request, for each changed feature, its intent.md (in full,
+  or its diff when the PR changes it) next to the diff of its golden English
+  (<slice>.en). One comment per PR, found by its marker and updated in place;
+  at most max-chars characters. Needs bridge-en on PATH (setup-bridge-en),
+  a checkout with history (actions/checkout fetch-depth: 0) and a job with
+  permissions pull-requests: write (contents: read for the checkout).
+inputs:
+  features:
+    description: "Feature directories, as a shell glob (space-separated globs allowed)."
+    required: false
+    default: "features/*/"
+  working-directory:
+    description: "The app's module root, inside the checkout."
+    required: false
+    default: "."
+  base:
+    description: "Base commit. Default: the pull request's base SHA."
+    required: false
+    default: ""
+  max-chars:
+    description: "The most characters the comment may have (GitHub allows 65536)."
+    required: false
+    default: "60000"
+  token:
+    description: "Token that may write pull request comments."
+    required: false
+    default: ${{ github.token }}
+outputs:
+  comment-id:
+    description: The id of the created or updated comment.
+    value: ${{ steps.post.outputs.comment-id }}
+runs:
+  using: composite
+  steps:
+    - id: post
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BRIDGE_EN_FEATURES: ${{ inputs.features }}
+        BRIDGE_EN_BASE: ${{ inputs.base || github.event.pull_request.base.sha }}
+        BRIDGE_EN_MAX: ${{ inputs.max-chars }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: '"$GITHUB_ACTION_PATH/post.sh"'

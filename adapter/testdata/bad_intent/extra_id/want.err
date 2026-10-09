@@ -1,0 +1,1 @@
+testdata/bad_intent/extra_id/intent.md:26:1: refused: failure case F4 that action.go does not declare is not in the allowed pattern list (I3 intent = code). intent.md lists F1, F2, F3, F4; action.go declares F1, F2, F3. Declare it in action.go (F4 = failure.New("F4", http.Status<Name>, "<message>")) and raise it with a guard, or remove it from intent.md

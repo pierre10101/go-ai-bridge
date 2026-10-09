@@ -24,6 +24,10 @@ type Pattern struct {
 // E), queries/*.sql (Q) and what the adapter reads outside the slice: the
 // app's internal/domain (M) and cmd/server, bound with the runtime's httpx (H).
 var Grammar = []Pattern{
+	// The intent, written first (features/<slice>/intent.md). -check and -write read it before action.go.
+	{"I1", "intent first", "every slice has intent.md; -check and -write refuse a slice without one before they read action.go"},
+	{"I2", "failure cases", "intent.md has exactly one heading \"## Failure cases\" with one line per failure case, \"- F<n>: <text>\", F-IDs in increasing order, each once; a long case continues on lines indented by two spaces; no failure case: the single line \"None.\"; no F-ID list item anywhere else in intent.md; the rest of intent.md is free English"},
+	{"I3", "intent = code", "the F-IDs listed in intent.md are exactly the F-IDs action.go declares (D6), each missing or extra ID refused by name; every F-ID is covered by a check in checks/ (func TestF<n>_... that references <slice>.F<n>)"},
 	// Declarations (top level of action.go).
 	{"D1", "package", "package <snake_case_name>"},
 	{"D2", "imports", "only context, net/http, github.com/pierre10101/go-ai-bridge/runtime/{assert,failure,page}, <module>/internal/domain, <module>/features/<name>/db; no renamed, dot or blank imports"},
@@ -62,11 +66,11 @@ var Grammar = []Pattern{
 	{"Q3", "insert", "INSERT INTO <table> (<col>, ...) VALUES (<value>, ...) RETURNING <col>, ...; a value may also be (SELECT COALESCE(MAX(<col>), 0) + 1 FROM <table>) for the same column and table"},
 	{"Q4", "value", "? or sqlc.arg(<name>) (a parameter), an integer, or 'text'"},
 	{"Q5", "keyset page", "SELECT <col>, ... FROM <table> WHERE <col> = <value> [AND ...] AND <cursor> < <value> ORDER BY <cursor> DESC LIMIT <n>; :many only; no OFFSET; no comparison other than the cursor (not with the current time either); <n> is a parameter or 1..page.MaxPageSize; the action guards the limit with page.IsPageLimit; the English states page.MaxPageSize and page.DefaultPageSize; a :many without LIMIT is refused; GET slices only"},
-	{"Q6", "claim update", "UPDATE <table> SET <col> = <value>, ... WHERE <cond> [AND <cond>]...; <cond> is <col> = <> < <= > >= <value>, or one parenthesised (<cond> OR <cond> ...) group; at least one <col> = <parameter> outside the group; a parameter may be +/- a whole number (sqlc.arg(now) - 600); next to the current time (T1) a comparison is said as a distance: <= now - d is 'd or more before', < 'more than d before', > 'later than d before', >= 'no earlier than d before'; >= now + d is 'd or more after', > 'more than d after', < 'earlier than d after', <= 'no later than d after'; with no offset, <= now is 'no later than the current time', < 'earlier than', > 'later than', >= 'no earlier than'; the same words in a Q1 count or Q2 one-row read; :execrows only, no RETURNING; the check and the write are one statement; checked by S10 (or, over a Q7 IN list, S11)"},
+	{"Q6", "claim update", "UPDATE <table> SET <col> = <value>, ... WHERE <cond> [AND <cond>]...; <cond> is <col> = <> < <= > >= <value>, or one parenthesised (<cond> OR <cond> ...) group; at least one <col> = <parameter> outside the group; a parameter may be +/- a whole number (SET expires_at = sqlc.arg(now) + 600); next to the current time (T1) a comparison is said as a distance: <= now - d is 'd or more before', < 'more than d before', > 'later than d before', >= 'no earlier than d before'; >= now + d is 'd or more after', > 'more than d after', < 'earlier than d after', <= 'no later than d after'; with no offset, <= now is 'no later than the current time', < 'earlier than', > 'later than', >= 'no earlier than'; the same words in a Q1 count or Q2 one-row read; :execrows only, no RETURNING; the check and the write are one statement; checked by S10 (or, over a Q7 IN list, S11)"},
 	{"Q7", "IN list", "<col> IN (sqlc.slice(<name>)) as one AND condition of a Q1, Q2 or Q6 WHERE (never inside an OR group); at most one per query; it is the last parameter of the statement (sqlc numbers parameters as if the slice were one value, so with SQLite a parameter after it would bind to a list entry); the action passes exactly a D10 list input for it; in a Q6 claim <col> is the table's single-column PRIMARY KEY in schema.sql, so each entry is at most one row; English: `<col>` is one of the request's `<list>`"},
 	// Rules across statements.
 	{"T1", "time is passed in", "action.go and internal/domain never import time or read a clock; the current time is an Input field Now int64 `json:\"now\" clock:\"now\"` set by the server (httpx.ClockRule), never sent by the caller (body or query string: HTTP 400); next to it a Q6 (or Q1, Q2) offset in seconds is said in minutes, hours or days; a read compares a column with the current time only through a parameter bound to in.Now itself"},
-	{"T2", "session is passed in", "the caller's session is at most one Input field Session int64 (or string) `json:\"session\" server:\"session\"`, set by httpx.Bind from the cookie httpx.SessionCookie (bridge_session) as httpx.SessionRule says: 0 (or the empty text) without exactly one valid cookie, so the action's own S2 guard raises its failure; a request whose body or query string sends it, in any letter case, is HTTP 400; the English lists it with the values the server sets, never among the fields the caller sends, and calls it the session from the cookie"},
+	{"T2", "session is passed in", "the caller's session is at most one Input field Session string (or int64) `json:\"session\" server:\"session\"`, set by httpx.Bind from the cookie httpx.SessionCookie (bridge_session) as httpx.SessionRule says: the empty text (or 0) without exactly one valid cookie, so the action's own S2 guard (if in.Session == \"\", or <= 0) raises its failure; it is the only identity of the caller: a claim or check never takes who the caller is from a request field (no person_id or user_id input); a request whose body or query string sends it, in any letter case, is HTTP 400; the English lists it with the values the server sets, never among the fields the caller sends, and calls it the session from the cookie"},
 	{"W1", "no check-then-write", "a Q3 or Q6 write to a table that an earlier Q1, Q2 or Q5 query of the same action read is refused; put the condition into the write (Q6) and check the changed-row count (S10)"},
 	// Read from outside the slice.
 	{"M1", "domain type", "every internal/domain type an action uses has a `// bridge-en: <display name>` doc line: a noun phrase, no parentheses; the only hand-written English in internal/domain"},
@@ -84,7 +88,7 @@ var Grammar = []Pattern{
 const clockHint = "Logic never reads the clock. Take the current time as an Input field (Now int64 `json:\"now\" clock:\"now\"`, set by the server; checks pass any time they like) and compare against it"
 
 // sessionHint is attached to every T2 refusal.
-const sessionHint = "Write: Session int64 `json:\"session\" server:\"session\"` (or string), set by the server from the session cookie (httpx.SessionCookie); checks pass any session they like"
+const sessionHint = "Write: Session string `json:\"session\" server:\"session\"` (or int64), set by the server from the session cookie (httpx.SessionCookie); checks pass any session they like"
 
 // checkThenWriteHint is attached to every W1 refusal.
 const checkThenWriteHint = "Do not read a row and then write it: another call can change it in between. Put the condition into the write itself (one Q6 claim: UPDATE <table> SET ... WHERE <col> = ? AND <condition>) and stop unless exactly one row changed (S10)"
@@ -135,6 +139,16 @@ func (r Refusal) Error() string {
 type Refusals []Refusal
 
 func (rs Refusals) Error() string {
+	sortRefusals(rs)
+	lines := make([]string, len(rs))
+	for i, r := range rs {
+		lines[i] = r.Error()
+	}
+	return strings.Join(lines, "\n")
+}
+
+// sortRefusals orders refusals by file, line and column.
+func sortRefusals(rs Refusals) {
 	sort.SliceStable(rs, func(i, j int) bool {
 		a, b := rs[i].Pos, rs[j].Pos
 		if a.Filename != b.Filename {
@@ -145,11 +159,6 @@ func (rs Refusals) Error() string {
 		}
 		return a.Column < b.Column
 	})
-	lines := make([]string, len(rs))
-	for i, r := range rs {
-		lines[i] = r.Error()
-	}
-	return strings.Join(lines, "\n")
 }
 
 // GrammarText renders the allowed pattern list (bridge-en -grammar).

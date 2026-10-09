@@ -4,4 +4,4 @@
 SELECT COUNT(*) FROM seats WHERE id = ?;
 
 -- name: SeatHolder :one
-SELECT held_by, held_at FROM seats WHERE id = ?;
+SELECT held_by, expires_at FROM seats WHERE id = ?;

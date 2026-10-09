@@ -25,12 +25,12 @@ holds it and its hold expires later than now: a hold whose `expires_at` is
 exactly now has expired; one that expires one second after now has not.
 
 ## Failure cases
-- **F1** — there is no valid session cookie (the session is empty): nothing
+- F1: there is no valid session cookie (the session is empty): nothing
   is written.
-- **F2** — at least one requested ticket is held by this session but its hold
+- F2: at least one requested ticket is held by this session but its hold
   has expired (it expires now or earlier): no ticket is sold, every change
   is rolled back.
-- **F3** — at least one requested ticket is not held by this session (held by
+- F3: at least one requested ticket is not held by this session (held by
   someone else, free, already sold, or no such ticket): no ticket is sold,
   every change is rolled back.
 

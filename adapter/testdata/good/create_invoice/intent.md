@@ -20,9 +20,9 @@ is a bad request (HTTP 400) and none of the failure cases below is checked.
 - `customer_id` and `total` (cents + currency) as stored.
 
 ## Failure cases
-- **F1** — the customer does not exist.
-- **F2** — the amount is zero or negative.
-- **F3** — the currency is not one we invoice in.
+- F1: the customer does not exist.
+- F2: the amount is zero or negative.
+- F3: the currency is not one we invoice in.
 
 ## Out of scope
 Line items, tax, discounts, editing or voiding invoices.

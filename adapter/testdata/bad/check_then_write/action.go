@@ -15,20 +15,19 @@ import (
 const Route = "POST /holds"
 
 type Input struct {
-	SeatID   int64 `json:"seat_id"`
-	PersonID int64 `json:"person_id"`
-	Now      int64 `json:"now" clock:"now"`
+	SeatID  int64 `json:"seat_id"`
+	Session int64 `json:"session" server:"session"`
+	Now     int64 `json:"now" clock:"now"`
 }
 
 type Output struct {
 	SeatID int64 `json:"seat_id"`
-	HeldBy int64 `json:"held_by"`
-	HeldAt int64 `json:"held_at"`
+	Now    int64 `json:"now"`
 }
 
 var (
 	F1 = failure.New("F1", http.StatusConflict, "seat is already held")
-	F2 = failure.New("F2", http.StatusUnprocessableEntity, "person is required")
+	F2 = failure.New("F2", http.StatusUnauthorized, "session is required")
 )
 
 type Action struct {
@@ -38,11 +37,11 @@ type Action struct {
 func New(q *db.Queries) *Action { return &Action{q: q} }
 
 func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
-	if in.PersonID <= 0 {
+	if in.Session <= 0 {
 		return Output{}, F2
 	}
 
-	holds, err := a.q.SeatHolds(ctx, in.SeatID, in.PersonID)
+	holds, err := a.q.SeatHolds(ctx, in.SeatID, in.Session)
 	if err != nil {
 		return Output{}, err
 	}
@@ -51,9 +50,9 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	}
 
 	claimed, err := a.q.ClaimSeat(ctx, db.ClaimSeatParams{
-		HeldBy: in.PersonID,
-		Now:    in.Now,
-		ID:     in.SeatID,
+		Session: in.Session,
+		Now:     in.Now,
+		ID:      in.SeatID,
 	})
 	if err != nil {
 		return Output{}, err
@@ -62,7 +61,7 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 		return Output{}, F1
 	}
 
-	out := Output{SeatID: in.SeatID, HeldBy: in.PersonID, HeldAt: in.Now}
-	assert.Post(out.HeldBy == in.PersonID, "the hold belongs to the requester")
+	out := Output{SeatID: in.SeatID, Now: in.Now}
+	assert.Post(out.Now == in.Now, "the answer carries the server's clock")
 	return out, nil
 }

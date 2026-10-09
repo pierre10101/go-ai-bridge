@@ -26,9 +26,9 @@ Listing never writes and must not hold the write lock: it reads one snapshot
 in a read-only transaction, so creating invoices is not blocked by it.
 
 ## Failure cases
-- **F1** — the customer does not exist.
-- **F2** — `limit` is outside 1 to the maximum page size.
-- **F3** — `after` is zero or negative (omit it for the first page instead).
+- F1: the customer does not exist.
+- F2: `limit` is outside 1 to the maximum page size.
+- F3: `after` is zero or negative (omit it for the first page instead).
 
 ## Out of scope
 Creating, editing or voiding invoices; filtering by date or amount; OFFSET paging.

@@ -29,7 +29,7 @@ func newAction(t *testing.T) (*release_example.Action, *sql.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	if _, err := conn.Exec(`INSERT INTO seats (id, held_by, held_at) VALUES (1, 7, ?), (2, 0, 0)`, t0); err != nil {
+	if _, err := conn.Exec(`INSERT INTO seats (id, held_by, expires_at) VALUES (1, 7, ?), (2, 0, 0)`, t0+600); err != nil {
 		t.Fatal(err)
 	}
 	return release_example.New(db.New(txn.DB(conn))), conn
@@ -41,12 +41,12 @@ func release(a *release_example.Action, seat, session int64) (release_example.Ou
 	return txn.Run(context.Background(), func(ctx context.Context) (release_example.Output, error) { return a.Handle(ctx, in) })
 }
 
-func holder(t *testing.T, conn *sql.DB, seat int64) (by, at int64) {
+func holder(t *testing.T, conn *sql.DB, seat int64) (by, until int64) {
 	t.Helper()
-	if err := conn.QueryRow(`SELECT held_by, held_at FROM seats WHERE id = ?`, seat).Scan(&by, &at); err != nil {
+	if err := conn.QueryRow(`SELECT held_by, expires_at FROM seats WHERE id = ?`, seat).Scan(&by, &until); err != nil {
 		t.Fatal(err)
 	}
-	return by, at
+	return by, until
 }
 
 func TestReleasesOwnHold(t *testing.T) {
@@ -55,8 +55,8 @@ func TestReleasesOwnHold(t *testing.T) {
 	if err != nil || out != (release_example.Output{SeatID: 1}) {
 		t.Fatalf("out %+v err %v", out, err)
 	}
-	if by, at := holder(t, conn, 1); by != 0 || at != 0 {
-		t.Fatalf("seat still held by %d at %d", by, at)
+	if by, until := holder(t, conn, 1); by != 0 || until != 0 {
+		t.Fatalf("seat still held by %d until %d", by, until)
 	}
 }
 
@@ -86,8 +86,8 @@ func TestF3_NotHeldByThisSession(t *testing.T) {
 	if _, err := release(a, 1, 8); !errors.Is(err, release_example.F3) {
 		t.Fatalf("other session: want F3, got %v", err)
 	}
-	if by, at := holder(t, conn, 1); by != 7 || at != t0 {
-		t.Fatalf("hold changed to %d at %d", by, at)
+	if by, until := holder(t, conn, 1); by != 7 || until != t0+600 {
+		t.Fatalf("hold changed to %d until %d", by, until)
 	}
 	if _, err := release(a, 2, 7); !errors.Is(err, release_example.F3) {
 		t.Fatalf("free seat: want F3, got %v", err)

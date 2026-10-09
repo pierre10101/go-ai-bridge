@@ -16,9 +16,9 @@ The visitor whose session cookie identifies them (no login in this example).
 - `seat_id` — the seat that was released.
 
 ## Failure cases
-- **F1** — there is no valid session cookie (the session is 0).
-- **F2** — the seat does not exist: nothing changed.
-- **F3** — the seat exists but this session does not hold it (it is free or
+- F1: there is no valid session cookie (the session is 0).
+- F2: the seat does not exist: nothing changed.
+- F3: the seat exists but this session does not hold it (it is free or
   someone else holds it): nothing changed.
 
 ## Out of scope

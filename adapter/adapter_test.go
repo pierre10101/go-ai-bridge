@@ -125,19 +125,19 @@ func TestClaimRules(t *testing.T) {
 			want: "refused: comparison claimed > 0 on a claim's changed-row count"},
 		"clock field from the caller": {goFrom: "`json:\"now\" clock:\"now\"`", goTo: "`json:\"now\" clock:\"utc\"`",
 			want: "refused: clock field Now that is not int64 tagged clock:\"now\""},
-		"clock on output": {goFrom: "HeldAt int64 `json:\"held_at\"`", goTo: "HeldAt int64 `json:\"held_at\" clock:\"now\"`",
-			want: "refused: clock tag on HeldAt outside Input"},
+		"clock on output": {goFrom: "Now    int64 `json:\"now\"`", goTo: "Now    int64 `json:\"now\" clock:\"now\"`",
+			want: "refused: clock tag on Now outside Input"},
 		"execrows needed": {sqlFrom: ":execrows", sqlTo: ":one",
 			want: "refused: query annotation :one on a claim update is not in the allowed pattern list (Q0 query annotation)"},
-		"no where": {sqlFrom: "\nWHERE id = sqlc.arg(id) AND (held_by = 0 OR held_at <= sqlc.arg(now) - 600)", sqlTo: "",
+		"no where": {sqlFrom: "\nWHERE id = sqlc.arg(id) AND (held_by = 0 OR expires_at <= sqlc.arg(now))", sqlTo: "",
 			want: "refused: end of statement is not in the allowed pattern list (query ClaimSeat). Expected WHERE after SET"},
 		"no id": {sqlFrom: "id = sqlc.arg(id) AND ", sqlTo: "",
 			want: "refused: claim update with no <col> = <parameter> condition"},
-		"returning": {sqlFrom: "- 600);", sqlTo: "- 600) RETURNING id;",
+		"returning": {sqlFrom: "sqlc.arg(now));", sqlTo: "sqlc.arg(now)) RETURNING id;",
 			want: "refused: RETURNING on an UPDATE is not in the allowed pattern list (query ClaimSeat)"},
-		"or outside a group": {sqlFrom: "(held_by = 0 OR held_at <= sqlc.arg(now) - 600)", sqlTo: "held_by = 0 OR held_at <= sqlc.arg(now) - 600",
+		"or outside a group": {sqlFrom: "(held_by = 0 OR expires_at <= sqlc.arg(now))", sqlTo: "held_by = 0 OR expires_at <= sqlc.arg(now)",
 			want: "refused: OR in WHERE is not in the allowed pattern list (query ClaimSeat)"},
-		"subquery": {sqlFrom: "(held_by = 0 OR held_at <= sqlc.arg(now) - 600)", sqlTo: "(SELECT 1)",
+		"subquery": {sqlFrom: "(held_by = 0 OR expires_at <= sqlc.arg(now))", sqlTo: "(SELECT 1)",
 			want: "refused: subquery is not in the allowed pattern list (query ClaimSeat)"},
 	}
 	for name, tc := range cases {
@@ -171,7 +171,7 @@ func TestClaimRules(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "queries", "seat_holder.sql"), []byte(read), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		mutated := strings.Replace(string(src), "\tif claimed != 1 {", "\tholder, err := a.q.SeatHolder(ctx, in.SeatID)\n\tif err != nil {\n\t\treturn Output{}, err\n\t}\n\tif claimed == 0 && holder.HeldBy == in.PersonID {\n\t\treturn Output{}, F2\n\t}\n\tif claimed != 1 {", 1)
+		mutated := strings.Replace(string(src), "\tif claimed != 1 {", "\tholder, err := a.q.SeatHolder(ctx, in.SeatID)\n\tif err != nil {\n\t\treturn Output{}, err\n\t}\n\tif claimed == 0 && holder.HeldBy == in.Session {\n\t\treturn Output{}, F2\n\t}\n\tif claimed != 1 {", 1)
 		if err := os.WriteFile(filepath.Join(dir, "action.go"), []byte(mutated), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -179,7 +179,7 @@ func TestClaimRules(t *testing.T) {
 		if err != nil {
 			t.Fatalf("refused a diagnostic read after the claim: %v", err)
 		}
-		if !strings.Contains(got, "If no seat was changed in step 2 and the found seat's `held_by` equals the request's `person_id`, stop with F2") {
+		if !strings.Contains(got, "If no seat was changed in step 2 and the found seat's `held_by` equals the session from the cookie, stop with F2") {
 			t.Fatalf("English:\n%s", got)
 		}
 	})
@@ -310,7 +310,7 @@ func TestSQLShapes(t *testing.T) {
 		"update returning": {"UPDATE customers SET name = ? WHERE id = ? RETURNING id;", "q.sql:2:44: refused: RETURNING on an UPDATE"},
 		"update as :one":   {"UPDATE customers SET name = ? WHERE id = ?;", "q.sql:1:1: refused: query annotation :one on a claim update"},
 		"update no where":  {"UPDATE customers SET name = ?;", "Expected WHERE after SET"},
-		"update bare ? x2": {"UPDATE seats SET held_at = ? WHERE id = ? AND held_at <= ?;", "q.sql:2:58: refused: second bare ? for column held_at"},
+		"update bare ? x2": {"UPDATE seats SET expires_at = ? WHERE id = ? AND expires_at <= ?;", "q.sql:2:64: refused: second bare ? for column expires_at"},
 		"delete":           {"DELETE FROM customers WHERE id = ? RETURNING id;", "q.sql:2:1: refused: DELETE statement"},
 		"with":             {"WITH c AS (SELECT 1) SELECT COUNT(*) FROM c WHERE id = ?;", "q.sql:2:1: refused: WITH (common table expression)"},
 		"join":             {"SELECT seq FROM invoices JOIN customers ON customers.id = invoices.customer_id WHERE seq = ?;", "q.sql:2:26: refused: JOIN"},
@@ -335,7 +335,7 @@ func TestSQLShapes(t *testing.T) {
 		})
 	}
 	t.Run("ok/claim", func(t *testing.T) {
-		qs, errs := loadOne(t, "-- name: Q :execrows\nUPDATE seats SET held_by = ?, held_at = sqlc.arg(now) WHERE id = ? AND (held_by = 0 OR held_at <= sqlc.arg(now) - 600);\n")
+		qs, errs := loadOne(t, "-- name: Q :execrows\nUPDATE seats SET held_by = ?, expires_at = sqlc.arg(now) + 600 WHERE id = ? AND (held_by = 0 OR expires_at <= sqlc.arg(now));\n")
 		if len(errs) > 0 || qs["Q"] == nil || qs["Q"].bad || qs["Q"].Shape != "claim" {
 			t.Fatalf("refused Q6 claim: %v", errs)
 		}

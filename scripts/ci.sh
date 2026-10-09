@@ -27,6 +27,13 @@ mkdir -p bin
 go build -o bin/bridge-en ./cmd/bridge-en
 [ "$(bin/bridge-en -version)" = "bridge-en $(cat VERSION)" ] || { echo "bridge-en -version does not match VERSION" >&2; exit 1; }
 
+echo "== bridge-en init and pr-comment (binary)"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+bin/bridge-en init "$tmp" >/dev/null
+[ -f "$tmp/AGENTS.md" ] && [ -z "$(find "$tmp" -name '*.go')" ] || { echo "bridge-en init: want AGENTS.md and no Go code" >&2; exit 1; }
+bin/bridge-en pr-comment -base HEAD adapter/testdata/good/*/ | head -n1 | grep -qx '<!-- bridge-en:pr-english -->'
+bash -n .github/actions/pr-english/post.sh .github/actions/setup-bridge-en/install.sh
+
 echo "== go test"
 go test ./...
 
