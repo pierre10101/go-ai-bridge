@@ -28,16 +28,17 @@ var Grammar = []Pattern{
 	{"D1", "package", "package <snake_case_name>"},
 	{"D2", "imports", "only context, net/http, github.com/pierre10101/go-ai-bridge/runtime/{assert,failure,page}, <module>/internal/domain, <module>/features/<name>/db; no renamed, dot or blank imports"},
 	{"D3", "route", `const Route = "<METHOD> /<path>"`},
-	{"D4", "input", "type Input struct { <Field> <type> `json:\"<name>\"` ... }; at most 10 fields; type is int64, string, bool or domain.<T>; every field is required (H1: left out or null is HTTP 400), except the server-set inputs: an int64 field tagged clock:\"now\" (T1) and one int64 or string field tagged server:\"session\" (T2), which the server sets and the caller must not send"},
+	{"D4", "input", "type Input struct { <Field> <type> `json:\"<name>\"` ... }; at most 10 fields; type is int64, string, bool, domain.<T> or a D10 list ([]int64 or []string tagged list:\"<min>..<max>\"); every field is required (H1: left out or null is HTTP 400), except the server-set inputs: an int64 field tagged clock:\"now\" (T1) and one int64 or string field tagged server:\"session\" (T2), which the server sets and the caller must not send"},
 	{"D5", "output", "type Output struct { ... } with the same field rules as D4, plus []domain.<T> list fields (one page of rows)"},
 	{"D6", "failures", `var ( F<n> = failure.New("F<n>", http.Status<Name>, "<message>") ... )`},
 	{"D7", "action", "type Action struct { q *db.Queries }"},
 	{"D8", "constructor", "func New(q *db.Queries) *Action { return &Action{q: q} }"},
 	{"D9", "handle", "func (a *Action) Handle(ctx context.Context, in Input) (Output, error) { S... }"},
+	{"D10", "list input", "an Input field <Field> []int64 (or []string) `json:\"<name>\" list:\"<min>..<max>\"` with 1 <= min <= max <= httpx.MaxListLen (100); POST/PUT/PATCH/DELETE only; httpx.Bind answers HTTP 400 when the list has fewer than min or more than max entries, has the same entry twice, has an entry that is null or of the wrong type (httpx.ListWhen); English (httpx.ListRule): a list of <min> to <max> whole numbers (text values) with no duplicates; used only as the list of a Q7 IN and in the S11 check"},
 	// Statements (body of Handle). Rendered as numbered Steps in code order.
 	{"S1", "precondition", `assert.Pre(<cond>, "<reason>"); only at the top of Handle; zero or more; must not read in (see "meaningful precondition")`},
 	{"S2", "guard", "if <cond> { return Output{}, F<n> }"},
-	{"S3", "query", "<name>, err := a.q.<Query>(ctx, <value>...); <Query> is a Q1-Q3, Q5 or Q6 query"},
+	{"S3", "query", "<name>, err := a.q.<Query>(ctx, <value>...); <Query> is a Q1-Q3, Q5 or Q6 query; the list of a Q7 IN takes exactly a D10 list input in.<List>"},
 	{"S4", "error return", "if err != nil { return Output{}, err }; immediately after every S3"},
 	{"S5", "let", "<name> := <value>"},
 	{"S6", "postcondition", `assert.Post(<cond>, "<reason>"); after the last S2-S5, at least one`},
@@ -45,12 +46,13 @@ var Grammar = []Pattern{
 	{"S8", "map each", "<items> := make([]domain.<T>, len(<rows>)); for <i>, <row> := range <rows> { <items>[<i>] = domain.<T>{...} }; only over a Q5 :many result; English: for each row"},
 	// Expressions.
 	{"S9", "next cursor", `<name> := page.NextAfter(<Q5 result>, "<cursor column>", <the Q5 LIMIT value>); after the Q5 query; at most one; the keyset cursor of the next page (0 when there is none)`},
-	{"S10", "claim check", "after a Q6 claim <n>, err := a.q.<Query>(...): an S2 guard if <n> != 1 { return Output{}, F<n> } before the success return; <n> is compared only as != 1, == 1 or == 0; English: not exactly one <row> was changed in step <k>; a step that may stop says what happens to the claim's write: a guard with the conjunct <n> == 0 'Nothing was written in step <k>', a step before the count is checked (a read, the != 1 guard) 'Any change made in step <k> is rolled back', a step after it 'The write in step <k> is rolled back'"},
+	{"S10", "claim check", "after a Q6 claim <n>, err := a.q.<Query>(...): an S2 guard whose entire condition is <n> != 1, if <n> != 1 { return Output{}, F<n> }, before the success return; the same test inside a compound condition (&&, ||, !) does not count, though such guards may stay as extra guards; <n> is compared only as != 1, == 1 or == 0; English: not exactly one <row> was changed in step <k>; a step that may stop says what happens to the claim's write: a guard with the conjunct <n> == 0 'Nothing was written in step <k>', a step before the count is checked (a read, the != 1 guard) 'Any change made in step <k> is rolled back', a step after it 'The write in step <k> is rolled back'"},
+	{"S11", "multi-row claim check", "after a Q6 claim over <key> IN (sqlc.slice(<name>)) (Q7) whose list is the D10 input in.<List>: an S2 guard whose entire condition is <n> != int64(len(in.<List>)), if <n> != int64(len(in.<List>)) { return Output{}, F<n> }, before the success return; inside a compound condition it does not count; <n> is compared only in this check or as == 0; len appears nowhere else; English: the number of <rows> changed in step <k> is not the number of <rows> in the request's `<list>`; the rollback lines are those of S10"},
 	{"E1", "name", "<local> or <local>.<Field>[.<Field>]"},
 	{"E2", "literal", "integer, string, true, false, nil"},
 	{"E3", "comparison", "== != < <= > >=; against the current time on the right (also inside a domain function called with it) said as no later than, earlier than, later than, no earlier than, exactly, not exactly the current time"},
 	{"E4", "logic", "&& || !"},
-	{"E5", "domain call", "domain.<Func>(<value>...); <Func> is an M2 domain function, rendered from its body; or page.IsPageLimit(<value>), a runtime primitive: <value> is between 1 and page.MaxPageSize (both included)"},
+	{"E5", "domain call", "domain.<Func>(<value>...); <Func> is an M2 domain function, rendered from its body; or page.IsPageLimit(<value>), a runtime primitive: <value> is between 1 and page.MaxPageSize (both included); no other call (len only as int64(len(in.<List>)) in the S11 check)"},
 	{"E6", "record", "<Type>{<Field>: <value>, ...}; keyed; Type is Output, domain.<T> or db.<T>Params"},
 	{"E7", "parentheses", "(<expr>)"},
 	// SQL (queries/*.sql). Anything else is refused with file:line:col.
@@ -60,7 +62,8 @@ var Grammar = []Pattern{
 	{"Q3", "insert", "INSERT INTO <table> (<col>, ...) VALUES (<value>, ...) RETURNING <col>, ...; a value may also be (SELECT COALESCE(MAX(<col>), 0) + 1 FROM <table>) for the same column and table"},
 	{"Q4", "value", "? or sqlc.arg(<name>) (a parameter), an integer, or 'text'"},
 	{"Q5", "keyset page", "SELECT <col>, ... FROM <table> WHERE <col> = <value> [AND ...] AND <cursor> < <value> ORDER BY <cursor> DESC LIMIT <n>; :many only; no OFFSET; <n> is a parameter or 1..page.MaxPageSize; the action guards the limit with page.IsPageLimit; the English states page.MaxPageSize and page.DefaultPageSize; a :many without LIMIT is refused; GET slices only"},
-	{"Q6", "claim update", "UPDATE <table> SET <col> = <value>, ... WHERE <cond> [AND <cond>]...; <cond> is <col> = <> < <= > >= <value>, or one parenthesised (<cond> OR <cond> ...) group; at least one <col> = <parameter> outside the group; a parameter may be +/- a whole number (sqlc.arg(now) - 600); next to the current time (T1) a comparison is said as a distance: <= now - d is 'd or more before', < 'more than d before', > 'later than d before', >= 'no earlier than d before'; >= now + d is 'd or more after', > 'more than d after', < 'earlier than d after', <= 'no later than d after'; with no offset, <= now is 'no later than the current time', < 'earlier than', > 'later than', >= 'no earlier than'; :execrows only, no RETURNING; the check and the write are one statement; checked by S10"},
+	{"Q6", "claim update", "UPDATE <table> SET <col> = <value>, ... WHERE <cond> [AND <cond>]...; <cond> is <col> = <> < <= > >= <value>, or one parenthesised (<cond> OR <cond> ...) group; at least one <col> = <parameter> outside the group; a parameter may be +/- a whole number (sqlc.arg(now) - 600); next to the current time (T1) a comparison is said as a distance: <= now - d is 'd or more before', < 'more than d before', > 'later than d before', >= 'no earlier than d before'; >= now + d is 'd or more after', > 'more than d after', < 'earlier than d after', <= 'no later than d after'; with no offset, <= now is 'no later than the current time', < 'earlier than', > 'later than', >= 'no earlier than'; :execrows only, no RETURNING; the check and the write are one statement; checked by S10 (or, over a Q7 IN list, S11)"},
+	{"Q7", "IN list", "<col> IN (sqlc.slice(<name>)) as one AND condition of a Q1, Q2 or Q6 WHERE (never inside an OR group); at most one per query; it is the last parameter of the statement (sqlc numbers parameters as if the slice were one value, so with SQLite a parameter after it would bind to a list entry); the action passes exactly a D10 list input for it; in a Q6 claim <col> is the table's single-column PRIMARY KEY in schema.sql, so each entry is at most one row; English: `<col>` is one of the request's `<list>`"},
 	// Rules across statements.
 	{"T1", "time is passed in", "action.go and internal/domain never import time or read a clock; the current time is an Input field Now int64 `json:\"now\" clock:\"now\"` set by the server (httpx.ClockRule), never sent by the caller (body or query string: HTTP 400); next to it a Q6 offset in seconds is said in minutes, hours or days"},
 	{"T2", "session is passed in", "the caller's session is at most one Input field Session int64 (or string) `json:\"session\" server:\"session\"`, set by httpx.Bind from the cookie httpx.SessionCookie (bridge_session) as httpx.SessionRule says: 0 (or the empty text) without exactly one valid cookie, so the action's own S2 guard raises its failure; a request whose body or query string sends it, in any letter case, is HTTP 400; the English lists it with the values the server sets, never among the fields the caller sends, and calls it the session from the cookie"},
@@ -69,7 +72,7 @@ var Grammar = []Pattern{
 	{"M1", "domain type", "every internal/domain type an action uses has a `// bridge-en: <display name>` doc line: a noun phrase, no parentheses; the only hand-written English in internal/domain"},
 	{"M2", "domain function", `every func in internal/domain: assert.Pre/Post(<cond>, "<reason>")..., then return <expr>; or (bool) switch <param> { case "<text>", ...: return true } then return false; English is rendered from the body; no bridge-en comment, no methods, no package-level vars; imports only fmt and runtime/{assert,shape}`},
 	{"M3", "domain expression", `<param>, literal, literal const, <T>(<expr>) conversion, == != < <= > >=, && || !, call to an M2 function, shape.Has(<text>, "<shape>") (# is one digit; a runtime primitive proven by runtime/shape tests), fmt.Sprintf("<format>", <expr>...) with %d, %0<n>d, %s`},
-	{"H1", "http plumbing", "github.com/pierre10101/go-ai-bridge/runtime/httpx declares BadInput, Internal, SuccessStatus, InputRule, QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ClockRule, SessionCookie, SessionRule, SessionValue, ServerSetWhen and ErrorBody; GET binds path/query (QueryInputRule) and runs in a read-only transaction (ReadTxRule); cmd/server binds every Route with the runtime's httpx.Bind over queries built on its txn.DB (one transaction per call); the app's go.mod pins the runtime at the binary's version"},
+	{"H1", "http plumbing", "github.com/pierre10101/go-ai-bridge/runtime/httpx declares BadInput, Internal, SuccessStatus, InputRule, QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ClockRule, SessionCookie, SessionRule, SessionValue, ServerSetWhen, ListRule, ListRuleExact, ListElems, ListWhen and ErrorBody; GET binds path/query (QueryInputRule) and runs in a read-only transaction (ReadTxRule); cmd/server binds every Route with the runtime's httpx.Bind over queries built on its txn.DB (one transaction per call); the app's go.mod pins the runtime at the binary's version"},
 }
 
 // A meaningful precondition (S1) states something the caller guarantees and
@@ -88,6 +91,15 @@ const checkThenWriteHint = "Do not read a row and then write it: another call ca
 
 // claimCheckHint is attached to every S10 refusal.
 const claimCheckHint = "After a Q6 claim, stop unless exactly one row changed: if <changed> != 1 { return Output{}, F<n> }"
+
+// listHint is attached to every D10 refusal.
+const listHint = "An Input list is []int64 or []string tagged with its bounds, list:\"<min>..<max>\" with 1 <= min <= max <= 100, for example SeatIDs []int64 `json:\"seat_ids\" list:\"1..20\"`"
+
+// listUseHint is attached to a list input used anywhere else than Q7 and S11.
+const listUseHint = "A list input (D10) is only passed to an IN (sqlc.slice(<name>)) parameter (Q7) and counted in the S11 check: if <changed> != int64(len(in.<List>)) { return Output{}, F<n> }"
+
+// multiCheckHint is attached to S11 refusals.
+const multiCheckHint = "After a claim over <key> IN (sqlc.slice(<name>)) (Q7), stop unless it changed one row per entry of the list: if <changed> != int64(len(in.<List>)) { return Output{}, F<n> }"
 
 const meaningfulPrecondition = "A precondition is what the caller guarantees and no request can break; request values are user input, so check them with an S2 guard and an F-ID"
 
@@ -144,7 +156,7 @@ func (rs Refusals) Error() string {
 func GrammarText() string {
 	var b strings.Builder
 	for _, p := range Grammar {
-		fmt.Fprintf(&b, "%-4s %-19s %s\n", p.ID, p.Name, p.Shape)
+		fmt.Fprintf(&b, "%-4s %-22s %s\n", p.ID, p.Name, p.Shape)
 	}
 	return b.String()
 }

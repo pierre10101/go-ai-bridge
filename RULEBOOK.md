@@ -24,10 +24,10 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Install and pin](#install-and-pin)
 - [App layout](#app-layout)
 - [Writing a slice](#writing-a-slice)
-- [Declarations: D1-D9](#declarations-d1-d9)
-- [Statements: S1-S10](#statements-s1-s10)
+- [Declarations: D1-D10](#declarations-d1-d10)
+- [Statements: S1-S11](#statements-s1-s11)
 - [Expressions: E1-E7](#expressions-e1-e7)
-- [SQL: Q0-Q6](#sql-q0-q6)
+- [SQL: Q0-Q7](#sql-q0-q7)
 - [Rules across statements: T1, T2, W1](#rules-across-statements-t1-t2-w1)
 - [Outside the slice: M1-M3, H1](#outside-the-slice-m1-m3-h1)
 - [Conditional claim and state-transition rules](#conditional-claim-and-state-transition-rules)
@@ -46,17 +46,17 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.1.2
+go get github.com/pierre10101/go-ai-bridge@v0.1.3
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.2
-bridge-en -version                      # bridge-en 0.1.2
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.3
+bridge-en -version                      # bridge-en 0.1.3
 ```
 
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.1.2
+require github.com/pierre10101/go-ai-bridge v0.1.3
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -67,9 +67,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.2   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.3   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.2
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.3
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -79,14 +79,14 @@ Without GitHub Actions: `go install …@v<version>` as above, or download
 check the hash.
 
 **Why app pull requests cannot rewrite the English.** The English quotes the
-runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`, `httpx.SessionRule`),
+runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`, `httpx.SessionRule`, `httpx.ListRule`),
 and the app runs that same runtime: both come from the one module version in
 `go.mod`, verified by the Go checksum database. The app has no copy to edit.
 `bridge-en -check` (and `-write`) first refuse an app whose `go.mod` requires
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.2; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.2), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.3; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.3), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
@@ -115,8 +115,8 @@ A slice:
 ```
 features/<slice>/
   intent.md          why, inputs, outputs, failure cases F1..Fn  (write this FIRST)
-  action.go          Route, Input, Output, F-IDs, Action, New, Handle (D1-D9, S1-S10)
-  queries/*.sql      plain SQL with sqlc annotations (Q0-Q6)
+  action.go          Route, Input, Output, F-IDs, Action, New, Handle (D1-D10, S1-S11)
+  queries/*.sql      plain SQL with sqlc annotations (Q0-Q7)
   db/                sqlc-generated code (never edited by hand)
   checks/*_test.go   one TestF<n>_... per F-ID, referencing <slice>.F<n>
   <slice>.en         golden English (bridge-en -write), reviewed in the pull request
@@ -131,8 +131,8 @@ its `txn.DB`.
 
 1. Write `intent.md` with every failure case (F1..Fn) in English **before any
    code**.
-2. Write `queries/*.sql` (Q0-Q6) and run `sqlc generate`.
-3. Write `action.go` inside D1-D9 / S1-S10.
+2. Write `queries/*.sql` (Q0-Q7) and run `sqlc generate`.
+3. Write `action.go` inside D1-D10 / S1-S11.
 4. Write one check per F-ID in `checks/` (`func TestF<n>_...` that references
    `<slice>.F<n>`).
 5. Bind the route in `cmd/server/routes.go`.
@@ -141,7 +141,7 @@ its `txn.DB`.
 
 ---
 
-## Declarations: D1-D9
+## Declarations: D1-D10
 
 Top level of `action.go`. Nothing else may be declared there.
 
@@ -193,7 +193,8 @@ Refused: `const MaxRetries = 3` - `refused: constant declaration MaxRetries is n
 ### D4
 
 **input** - `type Input struct` with at most 10 fields, each `int64`, `string`,
-`bool` or `domain.<T>`, each with a json tag. Every field is required (left
+`bool`, `domain.<T>` or a list input (D10: `[]int64` or `[]string` tagged
+`list:"<min>..<max>"`), each with a json tag. Every field is required (left
 out or null is HTTP 400). Exception, the **server-set inputs**: an `int64`
 field tagged `clock:"now"` (T1) and one `int64` or `string` field tagged
 `server:"session"` (T2) are set by the server; the caller must not send them
@@ -216,7 +217,7 @@ The request body is one JSON object with these 3 fields and no others:
 Every field is required, also inside objects: a field that is left out, or is null, is answered with HTTP 400 below and the action does not run.
 ```
 
-Refused: `Items []int64 \`json:"items"\`` - `refused: field type []int64 is not in the allowed pattern list (D4 input). List fields are only on Output (D5); Input stays scalar`
+Refused: `Lines []int64 \`json:"lines"\`` (a list without its bounds) - `refused: list field Lines without a list tag is not in the allowed pattern list (D10 list input). An Input list is []int64 or []string tagged with its bounds, list:"<min>..<max>" with 1 <= min <= max <= 100, for example SeatIDs []int64 \`json:"seat_ids" list:"1..20"\``
 
 ### D5
 
@@ -268,9 +269,45 @@ helpers go to `internal/domain`.
 
 Refused: `func vat(c int64) int64 { ... }` - `refused: function vat is not in the allowed pattern list (top level of action.go). Only New (D8) and Handle (D9); put pure helpers in internal/domain`
 
+### D10
+
+**list input** - an Input field `[]int64` or `[]string` with a json tag and
+its bounds, `list:"<min>..<max>"`, `1 <= min <= max <= httpx.MaxListLen`
+(100). The caller sends it in the JSON body (POST, PUT, PATCH, DELETE; never
+GET). `httpx.Bind` (`runtime/httpx`) answers HTTP 400 `bad_request`, and the
+action does not run, when the list has fewer than `<min>` or more than
+`<max>` entries, has the same entry twice, has an entry that is null, or has
+an entry of the wrong type (`httpx.ListWhen`; `runtime/httpx` `TestListWhenRefuses`).
+In `Handle` a list input is used in exactly two places: as the list of a Q7
+`IN (sqlc.slice(<name>))` and in the S11 check `int64(len(in.<List>))`.
+
+```go
+type Input struct {
+	TicketIDs []int64 `json:"ticket_ids" list:"1..20"`
+	Session   string  `json:"session" server:"session"`
+	Now       int64   `json:"now" clock:"now"`
+}
+```
+English (`adapter/testdata/good/confirm_many/confirm_many.en`, quoting
+`httpx.ListRule` and `httpx.ListElems`; with `<min>` = `<max>`,
+`httpx.ListRuleExact`: "a list of exactly 3 whole numbers with no duplicates"):
+```
+- `ticket_ids`: a list of 1 to 20 whole numbers with no duplicates.
+```
+and the 400 answer adds `; or a list has fewer or more entries than allowed
+above, has the same entry twice, or has an entry that is null`.
+
+Refused (`adapter/testdata/bad/list_shapes`):
+- `NoTag []int64 \`json:"no_tag"\`` - `refused: list field NoTag without a list tag is not in the allowed pattern list (D10 list input). ...`
+- `BadTag []int64 \`json:"bad_tag" list:"0..500"\`` - `refused: list field BadTag whose list tag "0..500" must have 1 <= min <= max <= 100 is not in the allowed pattern list (D10 list input). ...`
+- `Flags []bool \`json:"flags" list:"1..3"\`` - `refused: list field Flags of type []bool is not in the allowed pattern list (D10 list input). ...`
+- `Scalar int64 \`json:"scalar" list:"1..3"\`` - `refused: list tag on Scalar of type int64 ...`; on Output - `refused: list tag on Count outside Input ...`
+- `if in.SeatIDs == nil { ... }` - `refused: list input in.SeatIDs used as a value is not in the allowed pattern list (D10 list input). A list input (D10) is only passed to an IN (sqlc.slice(<name>)) parameter (Q7) and counted in the S11 check: ...`
+- a list in a GET action - `refused: list field TicketIDs in a GET action is not in the allowed pattern list (D10 list input). ...`
+
 ---
 
-## Statements: S1-S10
+## Statements: S1-S11
 
 The body of `Handle`. Rendered as numbered **Steps in code order**.
 
@@ -366,8 +403,13 @@ Refused: `page.NextAfter(rows, "seq", in.After)` - ``refused: page.NextAfter lim
 ### S10
 
 **claim check** - after a Q6 claim `n, err := a.q.<Claim>(...)`, an S2 guard
-`if n != 1 { return Output{}, F<n> }` before the success return. `n` is
-compared only as `!= 1`, `== 1` or `== 0`.
+whose **entire condition** is `n != 1`, `if n != 1 { return Output{}, F<n> }`,
+before the success return. `n` is compared only as `!= 1`, `== 1` or `== 0`.
+The same test inside a compound condition (`&&`, `||`, `!`) does not count:
+`claimed == 0 && claimed != 1` is `claimed == 0`, so a claim that changed 2
+rows would pass it while the English still names "not exactly one". Compound
+guards that mention the count may stay as extra guards (for example
+`claimed == 0 && <a read that explains why>`), next to the check.
 
 ```go
 claimed, err := a.q.ClaimSeat(ctx, db.ClaimSeatParams{HeldBy: in.PersonID, Now: in.Now, ID: in.SeatID})
@@ -387,8 +429,8 @@ says, for each earlier write:
 
 | Where | English |
 |---|---|
-| an insert (Q3) before it; or a claim, after a guard that stops unless exactly one row changed (`!= 1`) or unless one did (`== 0`) | `The write in step 2 is rolled back.` |
-| a claim whose count is not known yet: a read right after it, or the `!= 1` guard itself (0 rows, or several) | `Any change made in step 2 is rolled back.` |
+| an insert (Q3) before it; or a claim, after a guard that stops unless exactly one row changed (`!= 1`), unless one row per entry of its list changed (S11, `!= int64(len(in.<List>))`) or unless one did (`== 0`) | `The write in step 2 is rolled back.` |
+| a claim whose count is not known yet: a read right after it, or the `!= 1` (or S11) guard itself (0 rows, or several) | `Any change made in step 2 is rolled back.` |
 | a guard whose condition includes `<n> == 0` (`claimed == 0 && ...`): it stops only when the claim changed nothing | `Nothing was written in step 2, so there is nothing to roll back.` |
 
 The failure index says the same per F-ID: `before any write`, `after a write
@@ -411,7 +453,50 @@ rolled back`. From `adapter/testdata/good/release_example/release_example.en`:
    The write in step 2 is rolled back.
 ```
 
-Refused: no `!= 1` guard - `refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check)`; `claimed > 0` - `refused: comparison claimed > 0 on a claim's changed-row count is not in the allowed pattern list (S10 claim check)`
+Refused:
+- no `!= 1` guard - `refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check)`
+- `claimed > 0` - `refused: comparison claimed > 0 on a claim's changed-row count is not in the allowed pattern list (S10 claim check)`
+- only `if claimed == 0 && claimed != 1 { ... }` (`adapter/testdata/bad/claim_compound_check`) -
+  `refused: claim whose changed-row count is checked only inside a compound condition (line 56) is not in the allowed pattern list (S10 claim check). The check is a guard of its own whose entire condition is claimed != 1: if claimed != 1 { return Output{}, F<n> }. Inside &&, || or ! it does not stop every wrong count (claimed == 0 && claimed != 1 stops only when no row changed, so a claim that changed too many rows passes); such guards may stay as extra guards`
+
+### S11
+
+**multi-row claim check** - after a Q6 claim over a Q7 IN list on the table's
+key, `n, err := a.q.<Claim>(ctx, db.<Claim>Params{..., Ids: in.<List>})`, an
+S2 guard whose **entire condition** is `n != int64(len(in.<List>))`, with the
+same D10 list the claim's `IN (sqlc.slice(...))` was given, before the success
+return. Every entry is at most one row (the key) and appears once (D10), so
+the claim changed exactly one row per entry or the action stops and the
+transaction rolls back every change: all rows or none. `n` is otherwise
+compared only as `== 0`; `!= 1` and `== 1` are refused on a multi-row claim;
+`len` appears nowhere else (not reversed, not without `int64`, not in a let).
+Inside a compound condition the check does not count (as in S10). A stop says
+about the claim's write what S10 says.
+
+```go
+confirmed, err := a.q.ConfirmTickets(ctx, db.ConfirmTicketsParams{Session: in.Session, Now: in.Now, Ids: in.TicketIDs})
+if err != nil {
+	return Output{}, err
+}
+...
+if confirmed != int64(len(in.TicketIDs)) {
+	return Output{}, F3
+}
+```
+English (`adapter/testdata/good/confirm_many/confirm_many.en`):
+```
+5. If the number of tickets changed in step 2 is not the number of tickets in the request's `ticket_ids`, stop with F3: HTTP 409 Conflict "a ticket is not held by this session".
+   Any change made in step 2 is rolled back.
+6. Read: count the tickets whose `sold_to` is the session from the cookie and `id` is one of the request's `ticket_ids` (...). If the query fails, stop with HTTP 500 Internal Server Error.
+   The write in step 2 is rolled back.
+```
+
+Refused (`adapter/testdata/bad/claim_many_checks`):
+- `if confirmed != 1` - `refused: comparison confirmed != 1 on a multi-row claim's changed-row count is not in the allowed pattern list (S11 multi-row claim check). Compare the count of a claim over IN (sqlc.slice(...)) only as == 0 or in the check. After a claim over <key> IN (sqlc.slice(<name>)) (Q7), stop unless it changed one row per entry of the list: if confirmed != int64(len(in.TicketIDs)) { return Output{}, F<n> }`
+- `if confirmed != int64(len(in.Codes))` - `refused: comparison with the length of in.Codes, which is not the list of the claim in step 1 (in.TicketIDs) is not in the allowed pattern list (S11 multi-row claim check). ...`
+- only `if confirmed == 0 || confirmed != int64(len(in.TicketIDs))` - `refused: claim whose changed-row count is checked only inside a compound condition (line 50) is not in the allowed pattern list (S11 multi-row claim check). ...`
+- `wanted := int64(len(in.TicketIDs))` - `refused: call to int64 is not in the allowed pattern list (expression). E5: only domain.<Func>(...) and page.IsPageLimit(...) calls; queries go through S3; len only as int64(len(in.<List>)) in the S11 check`
+- `confirmed != int64(len(in.TicketIDs))` on a single-row claim - `refused: comparison confirmed != int64(len(in.TicketIDs)) on a single-row claim's changed-row count is not in the allowed pattern list (S11 multi-row claim check). ...`
 
 ---
 
@@ -468,7 +553,7 @@ if !page.IsPageLimit(in.Limit) {
 English: `2. If the request's `currency` is not one of "ZAR", "USD" or "EUR", stop with F3: ...` and
 `1. If the request's `limit` is not between 1 and 100 (both included), stop with F2: HTTP 400 Bad Request "page limit is out of range".`
 
-Refused: `len(in.Currency)` - `refused: call to len is not in the allowed pattern list (expression). E5: only domain.<Func>(...) and page.IsPageLimit(...) calls; queries go through S3`; `in.AmountCents + 1` - `refused: arithmetic operator + is not in the allowed pattern list (expression). Do arithmetic in internal/domain and call it (E5)`
+Refused: `len(in.Currency)` - `refused: call to len is not in the allowed pattern list (expression). E5: only domain.<Func>(...) and page.IsPageLimit(...) calls; queries go through S3; len only as int64(len(in.<List>)) in the S11 check`; `in.AmountCents + 1` - `refused: arithmetic operator + is not in the allowed pattern list (expression). Do arithmetic in internal/domain and call it (E5)`
 
 ### E6
 
@@ -485,7 +570,7 @@ Refused: `struct{ X int }{1}` or a closure - `refused: function literal (closure
 
 ---
 
-## SQL: Q0-Q6
+## SQL: Q0-Q7
 
 `queries/*.sql`, read by a strict shape parser. Anything outside a shape is
 refused at `file:line:col`.
@@ -553,7 +638,8 @@ WHERE id = sqlc.arg(id) AND (held_by = 0 OR held_at <= sqlc.arg(now) - 600);
   `<col> = <> < <= > >= <value>`, or one parenthesised `(<cond> OR <cond> ...)` group;
 - at least one `<col> = <parameter>` outside the group (which rows);
 - a parameter may be plus or minus a whole number (`sqlc.arg(now) - 600`);
-- `:execrows` only, no `RETURNING`; the action checks the count (S10).
+- `:execrows` only, no `RETURNING`; the action checks the count (S10, or S11
+  for a claim over a Q7 IN list).
 
 English: ``2. Claim: in table `seats`, set `held_by` = the request's `person_id` and `held_at` = the current time on each seat whose `id` is the request's `seat_id` and (`held_by` is 0 or `held_at` is 10 minutes or more before the current time) at that moment (query `ClaimSeat` in queries/claim_seat.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same seat.``
 
@@ -593,6 +679,40 @@ Refused:
 - `-- name: ClaimSeat :one` - `refused: query annotation :one on a claim update is not in the allowed pattern list (Q0 query annotation)`
 - `WHERE held_by = 0 OR held_at <= ...` (no parentheses) - `refused: OR in WHERE is not in the allowed pattern list (query ClaimSeat)`
 - `SET held_at = ? WHERE id = ? AND held_at <= ?` - `refused: second bare ? for column held_at ... name this one with sqlc.arg(<name>)`
+
+### Q7
+
+**IN list** - `<col> IN (sqlc.slice(<name>))`, one AND condition of a Q1, Q2
+or Q6 `WHERE`:
+
+- never inside an OR group, at most one per query, never a literal list or a
+  subquery, and `sqlc.slice` nowhere else (not in `SET`, `VALUES` or `=`);
+- it is the **last parameter of the statement**: sqlc numbers the parameters
+  of a statement as if the slice were one value (`?1`, `?2`, ...) and expands
+  it into one `?` per entry when the query runs; SQLite gives each of those
+  `?` the next number, so a numbered parameter after the slice would be bound
+  to one of the list's entries instead of its own value (with modernc.org/sqlite,
+  `expires_at > ?3` after a 3-entry list compares with the second id, and an
+  expired hold is sold). Parameters before the slice keep their numbers;
+- the action passes exactly a D10 list input for it (`Ids: in.TicketIDs`);
+- in a Q6 claim, `<col>` is the table's single-column `PRIMARY KEY` in
+  `schema.sql`, so each entry is at most one row and S11 can compare the
+  number of rows changed with the number of entries.
+
+```sql
+-- name: ConfirmTickets :execrows
+UPDATE tickets
+SET sold_to = sqlc.arg(session), held_by = ''
+WHERE held_by = sqlc.arg(session) AND expires_at > sqlc.arg(now) AND id IN (sqlc.slice(ids));
+```
+English: ``2. Claim: in table `tickets`, set `sold_to` = the session from the cookie and `held_by` = the text "" on each ticket whose `held_by` is the session from the cookie and `expires_at` is later than the current time and `id` is one of the request's `ticket_ids` at that moment (...)``; in a read, ``count the tickets whose `held_by` is the session from the cookie and `id` is one of the request's `ticket_ids` ``; in a guard, ``at least one ticket has `held_by` equal to the session from the cookie and `id` equal to one of the request's `ticket_ids` ``.
+
+Refused (`adapter/testdata/bad/list_shapes`):
+- `WHERE id IN (sqlc.slice(ids)) AND held_by = sqlc.arg(session) ...` - `refused: parameter session after IN (sqlc.slice(ids)) is not in the allowed pattern list (query ConfirmSliceFirst). sqlc numbers the parameters as if the slice were one value, so with SQLite a parameter after it is bound to one of the list's entries instead of its own value; put id IN (sqlc.slice(ids)) last in the statement`
+- a claim over `held_by IN (sqlc.slice(holders))` - `refused: claim over IN (sqlc.slice(holders)) on column held_by, which schema.sql does not declare as the single-column PRIMARY KEY of table tickets is not in the allowed pattern list (query ConfirmByHolder). ...`
+- `(expires_at = 0 OR id IN (sqlc.slice(ids)))` - `refused: IN inside an OR group is not in the allowed pattern list (query ConfirmInGroup). ...`
+- `WHERE id IN (1, 2)` - `refused: SQL "1" is not in the allowed pattern list (query CountListed). Expected (sqlc.slice(<name>)) after IN ...`
+- `a.q.CountTickets(ctx, in.Scalar)` - `refused: value in.Scalar for IN (sqlc.slice(ids)) that is not a list input is not in the allowed pattern list (Q7 IN list). ...`
 
 ---
 
@@ -765,7 +885,8 @@ Refused: `seq+1` - `refused: arithmetic operator + is not in the allowed pattern
 **http plumbing** - `github.com/pierre10101/go-ai-bridge/runtime/httpx` declares
 `BadInput`, `Internal`, `SuccessStatus`, `InputRule`, `QueryInputRule`,
 `BadQueryWhen`, `TxRule`, `ReadTxRule`, `ClockRule`, `SessionCookie`,
-`SessionRule`, `SessionValue`, `ServerSetWhen` and `ErrorBody`;
+`SessionRule`, `SessionValue`, `ServerSetWhen`, `ListRule`, `ListRuleExact`,
+`ListElems`, `ListWhen` and `ErrorBody`;
 `bridge-en` quotes the values compiled into it, which are the app's because
 `go.mod` pins the same version (the pin check above), and httpx's own tests
 prove each one. `cmd/server` binds every route with the runtime's
@@ -810,12 +931,25 @@ a hold, approving a request, consuming a one-time token. The seat hold in
 
    Each becomes an F-ID raised by a guard after the claim (`claimed == 0 && ...`
    reads that explain why nothing changed, allowed by W1), with the final
-   `claimed != 1` guard as the catch-all (S10). The English of a
-   `claimed == 0 && ...` guard says nothing was written (S10).
+   `claimed != 1` guard as the catch-all (S10): a guard of its own, never
+   part of a compound condition. The English of a `claimed == 0 && ...`
+   guard says nothing was written (S10).
+4. **Several rows at once: all or none** (D10 + Q7 + S11). Take the rows as
+   a list input with bounds and no duplicates, name them in the claim with
+   `<key> IN (sqlc.slice(<name>))` as the last parameter, and stop unless
+   the claim changed one row per entry: `if n != int64(len(in.<List>))`. A
+   stop rolls back every change, so one row that is not in the expected state
+   (expired, someone else's, already done, missing) leaves all of them as
+   they were. `adapter/testdata/good/confirm_many` confirms several held
+   tickets in one call; its checks run against SQLite: all confirmed, one
+   expired (nothing written), one not held by this session (everything
+   rolled back), an empty or repeated list (400), and concurrent calls (the
+   basket is sold once).
 
 ## Hard limits
 
 - `Handle`: at most 70 lines. `action.go`: at most 300 lines. Input: at most 10 fields.
+- List input (D10): at most `httpx.MaxListLen` (100) entries.
 - Page size: 1..`page.MaxPageSize` (100); default `page.DefaultPageSize` (20), both in `github.com/pierre10101/go-ai-bridge/runtime/page`.
 - No waivers: a refusal is fixed in the code, or by a new bridge-en release that adds a rule.
 

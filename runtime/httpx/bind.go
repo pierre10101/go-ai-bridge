@@ -8,8 +8,9 @@
 // bridge-en is built from the same module version and quotes the
 // declarations below (BadInput, Internal, SuccessStatus, InputRule,
 // QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ErrorBody, ClockRule in
-// clock.go, and SessionCookie, SessionRule, SessionValue and ServerSetWhen in
-// session.go) to write the HTTP and transaction sentences of every slice's
+// clock.go, SessionCookie, SessionRule, SessionValue and ServerSetWhen in
+// session.go, and ListRule, ListRuleExact, ListElems and ListWhen in
+// list.go) to write the HTTP and transaction sentences of every slice's
 // .en file. Bind answers only through them, and the tests in this package
 // prove each sentence, so the English cannot drift from what Bind does.
 package httpx
@@ -164,7 +165,11 @@ func decode[I any](w http.ResponseWriter, r *http.Request) (I, string) {
 	}
 	switch len(missing) {
 	case 0:
-		return in, ""
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return in, err.Error()
+		}
+		return in, checkLists(reflect.ValueOf(in), obj) // ListRule, ListWhen
 	case 1:
 		return in, fmt.Sprintf("required field %s is missing or null", missing[0])
 	}

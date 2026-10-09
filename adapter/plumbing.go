@@ -25,7 +25,8 @@ import (
 //   - runtime/httpx, which the app imports and this binary is built with:
 //     the declared outcomes BadInput and Internal, the SuccessStatus table,
 //     InputRule, QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ClockRule,
-//     SessionRule, SessionValue, ServerSetWhen and the ErrorBody shape. Bind uses these values and httpx's own tests
+//     SessionRule, SessionValue, ServerSetWhen, ListRule, ListRuleExact,
+//     ListElems, ListWhen and the ErrorBody shape. Bind uses these values and httpx's own tests
 //     prove each one, so the HTTP and transaction sentences in every .en file
 //     are tied to the plumbing.
 
@@ -47,6 +48,10 @@ type plumbing struct {
 	SessionRule        string // T2: how a `server:"session"` Input field is filled; {valid} and {zero} per type
 	SessionValue       map[string]struct{ Valid, Zero string }
 	ServerSetWhen      string // the BadInput condition of an action with a server-set input
+	ListRule           string // D10: a list input; {min}, {max} and {elems}
+	ListRuleExact      string // D10: a list input whose min equals its max
+	ListElems          map[string]string
+	ListWhen           string // the BadInput condition of an action with a list input
 	ErrorShape         string
 }
 
@@ -141,6 +146,10 @@ func loadHTTPX() (*plumbing, error) {
 		SessionRule:    httpx.SessionRule,
 		SessionValue:   httpx.SessionValue,
 		ServerSetWhen:  httpx.ServerSetWhen,
+		ListRule:       httpx.ListRule,
+		ListRuleExact:  httpx.ListRuleExact,
+		ListElems:      httpx.ListElems,
+		ListWhen:       httpx.ListWhen,
 	}
 	for m, st := range httpx.SuccessStatus {
 		p.Success[m] = st
@@ -153,6 +162,11 @@ func loadHTTPX() (*plumbing, error) {
 	for _, ph := range []string{"{valid}", "{zero}"} {
 		if !strings.Contains(p.SessionRule, ph) {
 			return nil, fmt.Errorf("%s/httpx: SessionRule must mention %s", RuntimePath, ph)
+		}
+	}
+	for _, ph := range []string{"{min}", "{max}", "{elems}"} {
+		if !strings.Contains(p.ListRule, ph) || (ph != "{max}" && !strings.Contains(p.ListRuleExact, ph)) {
+			return nil, fmt.Errorf("%s/httpx: ListRule and ListRuleExact must mention %s", RuntimePath, ph)
 		}
 	}
 	shape, err := errorShape(reflect.TypeOf(httpx.ErrorBody{}))
@@ -205,5 +219,10 @@ func loadEnv(dir string) (*env, Refusals, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	keyErrs, err := checkClaimKeys(root, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	refusals = append(refusals, keyErrs...)
 	return &env{root: root, domain: d, http: h, queries: q}, append(domainErrs, refusals...), nil
 }

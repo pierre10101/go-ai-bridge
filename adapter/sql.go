@@ -32,9 +32,12 @@ type SQLQuery struct {
 	Limit         sqlVal // LIMIT value (param or int literal 1..page.MaxPageSize)
 	LimitN        int    // LIMIT literal, checked against page.MaxPageSize when rendered
 	Reads, Writes []string
-	bad           bool // refused; already reported
-	pos           token.Position
-	toks          []sqlTok
+	// Q7 IN list: <SliceCol> IN (sqlc.slice(<Slice>)), at most one per query.
+	Slice, SliceCol string
+	slicePos        token.Position
+	bad             bool // refused; already reported
+	pos             token.Position
+	toks            []sqlTok
 }
 
 type sqlAssign struct {
@@ -43,7 +46,7 @@ type sqlAssign struct {
 }
 
 type sqlVal struct {
-	Kind  string // "param", "int", "string", "next"
+	Kind  string // "param", "int", "string", "next", "slice" (Q7: sqlc.slice(<Param>))
 	Param string // Kind param: sqlc parameter name
 	Lit   string // Kind int/string: literal text
 	Op    string // Q6 only: "+" or "-" with Off (a parameter plus or minus a whole number)
@@ -53,7 +56,7 @@ type sqlVal struct {
 // sqlCond is one Q6 WHERE condition: <col> <op> <value>, or a parenthesised
 // OR group of such conditions (Any).
 type sqlCond struct {
-	Col, Op string
+	Col, Op string // Op "in": Col IN (sqlc.slice(Val.Param)) (Q7)
 	Val     sqlVal
 	Any     []sqlCond
 }
@@ -68,7 +71,7 @@ type sqlTok struct {
 var nameRe = regexp.MustCompile(`^--\s*name:\s*(\w+)\s+(:\w+)`)
 
 // allowedSQL is the hint attached to every SQL refusal.
-const allowedSQL = "allowed SQL shapes: Q1 count, Q2 one row, Q3 insert, Q5 keyset page, Q6 claim update (see bridge-en -grammar)"
+const allowedSQL = "allowed SQL shapes: Q1 count, Q2 one row, Q3 insert, Q5 keyset page, Q6 claim update, Q7 IN list (see bridge-en -grammar)"
 
 // LoadQueries reads every queries/*.sql file in dir, keyed by query name.
 // Unrecognised SQL is returned as Refusals; refused queries are still in the
@@ -275,6 +278,14 @@ type sqlParser struct {
 	i      int
 	errs   *Refusals
 	failed bool
+	uses   []paramUse // every parameter in statement order (Q7: the slice is last)
+}
+
+// paramUse is one parameter in the statement text.
+type paramUse struct {
+	name  string
+	slice bool
+	pos   token.Position
 }
 
 func (p *sqlParser) peekAt(k int) sqlTok {
@@ -429,6 +440,10 @@ func (p *sqlParser) statement() {
 	if p.failed {
 		return
 	}
+	p.sliceLast()
+	if p.failed {
+		return
+	}
 	switch p.q.Shape {
 	case "count", "row", "page":
 		p.q.Reads = []string{p.q.Table}
@@ -505,10 +520,14 @@ func (p *sqlParser) from() {
 			p.finishPage()
 			return
 		}
-		if !p.need("=", "= or < after "+col) {
+		var v sqlVal
+		if p.is("IN") {
+			v, ok = p.inSlice(col)
+		} else if p.need("=", "= or < after "+col) {
+			v, ok = p.value(col, false)
+		} else {
 			return
 		}
-		v, ok := p.value(col, false)
 		if !ok {
 			return
 		}
@@ -697,7 +716,7 @@ func (p *sqlParser) update() {
 			group = true
 			var any []sqlCond
 			for {
-				c, ok := p.cond()
+				c, ok := p.cond(true)
 				if !ok {
 					return
 				}
@@ -717,7 +736,7 @@ func (p *sqlParser) update() {
 			}
 			p.q.Conds = append(p.q.Conds, sqlCond{Any: any})
 		} else {
-			c, ok := p.cond()
+			c, ok := p.cond(false)
 			if !ok {
 				return
 			}
@@ -728,22 +747,35 @@ func (p *sqlParser) update() {
 		}
 	}
 	for _, c := range p.q.Conds {
-		if c.Op == "=" && c.Val.Kind == "param" && c.Val.Op == "" {
+		if (c.Op == "=" && c.Val.Kind == "param" && c.Val.Op == "") || c.Op == "in" {
 			return
 		}
 	}
 	p.failed = true
 	*p.errs = append(*p.errs, Refusal{Pos: p.q.pos, Construct: "claim update with no <col> = <parameter> condition", Context: "query " + p.q.Name,
-		Hint: "A Q6 claim names the rows it may change with <col> = ? (for example id = ?) outside any OR group; " + allowedSQL})
+		Hint: "A Q6 claim names the rows it may change with <col> = ? (for example id = ?), or with <key> IN (sqlc.slice(<name>)) (Q7), outside any OR group; " + allowedSQL})
 }
 
 // claimOps are the comparisons allowed in a Q6 WHERE.
 var claimOps = map[string]string{"=": "=", "<>": "<>", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
 
-func (p *sqlParser) cond() (sqlCond, bool) {
+func (p *sqlParser) cond(inGroup bool) (sqlCond, bool) {
 	col, ok := p.ident("a column name in WHERE")
 	if !ok {
 		return sqlCond{}, false
+	}
+	if p.is("IN") {
+		if inGroup {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: p.peek().pos, Construct: "IN inside an OR group", Context: "query " + p.q.Name,
+				Hint: "A Q7 IN list is one condition of its own, joined with AND: <key> IN (sqlc.slice(<name>)); " + allowedSQL})
+			return sqlCond{}, false
+		}
+		v, ok := p.inSlice(col)
+		if !ok {
+			return sqlCond{}, false
+		}
+		return sqlCond{Col: col, Op: "in", Val: v}, true
 	}
 	t := p.peek()
 	op, ok := claimOps[t.up]
@@ -806,7 +838,13 @@ func (p *sqlParser) value(col string, insert bool) (sqlVal, bool) {
 	case t.kind == "param":
 		p.i++
 		p.addParam(col)
+		p.uses = append(p.uses, paramUse{name: col, pos: t.pos})
 		return sqlVal{Kind: "param", Param: col}, true
+	case t.kind == "word" && t.up == "SQLC" && p.peekAt(2).up == "SLICE":
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: t.pos, Construct: "sqlc.slice outside IN", Context: "query " + p.q.Name,
+			Hint: "sqlc.slice(<name>) is only the list of a Q7 condition <col> IN (sqlc.slice(<name>)); " + allowedSQL})
+		return sqlVal{}, false
 	case t.kind == "word" && t.up == "SQLC":
 		p.i++
 		if !p.need(".", ". after sqlc") || !p.need("ARG", "arg (sqlc.arg)") || !p.need("(", "( after sqlc.arg") {
@@ -818,6 +856,7 @@ func (p *sqlParser) value(col string, insert bool) (sqlVal, bool) {
 			return sqlVal{}, false
 		}
 		p.addParam(name)
+		p.uses = append(p.uses, paramUse{name: name, pos: t.pos})
 		return sqlVal{Kind: "param", Param: name}, true
 	case t.kind == "num":
 		p.i++
@@ -868,6 +907,68 @@ func (p *sqlParser) nextNumber(col string) (sqlVal, bool) {
 		}
 	}
 	return sqlVal{Kind: "next"}, true
+}
+
+// Q7: <col> IN (sqlc.slice(<name>)), at most once per query. The list is
+// bound to a D10 list input by the action (S3).
+func (p *sqlParser) inSlice(col string) (sqlVal, bool) {
+	at := p.peek()
+	if !p.need("IN", "IN") {
+		return sqlVal{}, false
+	}
+	const shape = "(sqlc.slice(<name>)) after IN"
+	if !p.need("(", shape) {
+		return sqlVal{}, false
+	}
+	if !p.is("SQLC") || p.peekAt(2).up != "SLICE" {
+		p.fail(shape + " (a Q7 IN list is one sqlc.slice parameter, never a list of values or a subquery)")
+		return sqlVal{}, false
+	}
+	start := p.peek()
+	if !(p.need("SQLC", shape) && p.need(".", shape) && p.need("SLICE", shape) && p.need("(", shape)) {
+		return sqlVal{}, false
+	}
+	name, ok := p.argName()
+	if !ok || !p.need(")", ") after sqlc.slice(name") || !p.need(")", ") closing IN (sqlc.slice(name))") {
+		return sqlVal{}, false
+	}
+	if p.q.Slice != "" {
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "second IN (sqlc.slice(...))", Context: "query " + p.q.Name,
+			Hint: "A query has at most one Q7 IN list; " + allowedSQL})
+		return sqlVal{}, false
+	}
+	for _, n := range p.q.Params {
+		if n == name {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: start.pos, Construct: "sqlc.slice(" + name + ") named like another parameter", Context: "query " + p.q.Name,
+				Hint: "Give the list its own name"})
+			return sqlVal{}, false
+		}
+	}
+	p.q.Slice, p.q.SliceCol, p.q.slicePos = name, col, at.pos
+	p.addParam(name)
+	p.uses = append(p.uses, paramUse{name: name, slice: true, pos: start.pos})
+	return sqlVal{Kind: "slice", Param: name}, true
+}
+
+// sliceLast refuses a parameter after the Q7 list. sqlc numbers the
+// parameters of a statement as if sqlc.slice(<name>) were one value and
+// expands it into one ? per entry when the query runs; SQLite gives each of
+// those ? the next number, so a numbered parameter after the slice (?3)
+// would be bound to one of the list's entries instead of its own value.
+// Before the slice every parameter keeps its number.
+func (p *sqlParser) sliceLast() {
+	for i, u := range p.uses {
+		if !u.slice || i == len(p.uses)-1 {
+			continue
+		}
+		next := p.uses[i+1]
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: next.pos, Construct: "parameter " + next.name + " after IN (sqlc.slice(" + u.name + "))", Context: "query " + p.q.Name,
+			Hint: "sqlc numbers the parameters as if the slice were one value, so with SQLite a parameter after it is bound to one of the list's entries instead of its own value; put " + p.q.SliceCol + " IN (sqlc.slice(" + u.name + ")) last in the statement"})
+		return
+	}
 }
 
 func tables(names []string) string {

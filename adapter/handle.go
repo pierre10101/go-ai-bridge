@@ -45,6 +45,12 @@ func (w *walker) handle(d *ast.FuncDecl) {
 	if n := end - start + 1; n > MaxHandleLines {
 		w.refuse(d, fmt.Sprintf("Handle of %d lines", n), "hard limit", fmt.Sprintf("At most %d lines", MaxHandleLines))
 	}
+	for _, in := range w.f.Input {
+		if in.List != "" && w.f.Method == "GET" {
+			w.errs = append(w.errs, Refusal{Pos: in.pos, Construct: "list field " + in.Name + " in a GET action", Context: "D10 list input",
+				Hint: "A GET takes path and query values only; a list input is sent in the JSON body of a POST, PUT, PATCH or DELETE"})
+		}
+	}
 	w.locals = map[string]*local{"a": {kind: "action"}, "ctx": {kind: "context"}, "in": {kind: "request"}}
 	stmts := d.Body.List
 	phase := 0 // 0 preconditions, 1 body, 2 postconditions, 3 returned
@@ -126,9 +132,67 @@ walk:
 	if !stopped {
 		for _, name := range sortedKeys(w.locals) {
 			if loc := w.locals[name]; loc.kind == "changed" && !loc.checked {
-				w.refuse(loc.stmt, "claim whose changed-row count no guard checks", "S10 claim check", claimCheckHint)
+				w.uncheckedClaim(name, loc)
 			}
 		}
+	}
+}
+
+// uncheckedClaim refuses a claim no guard checks with S10 (or S11). A guard
+// that tests the check inside a compound condition (&&, ||, !) does not
+// count: claimed == 0 && claimed != 1 is claimed == 0, so a claim that
+// changed 2 rows would pass it.
+func (w *walker) uncheckedClaim(name string, loc *local) {
+	ctx, check := "S10 claim check", name+" != 1"
+	if loc.multi {
+		ctx, check = "S11 multi-row claim check", name+" != int64(len(in."+loc.list+"))"
+	}
+	if loc.nested > 0 {
+		w.refuse(loc.stmt, fmt.Sprintf("claim whose changed-row count is checked only inside a compound condition (line %d)", loc.nested), ctx,
+			"The check is a guard of its own whose entire condition is "+check+": if "+check+" { return Output{}, F<n> }. Inside &&, || or ! it does not stop every wrong count ("+name+" == 0 && "+check+" stops only when no row changed, so a claim that changed too many rows passes); such guards may stay as extra guards")
+		return
+	}
+	if loc.multi {
+		w.refuse(loc.stmt, "claim whose changed-row count no guard checks", ctx, strings.NewReplacer("<changed>", name, "<List>", loc.list).Replace(multiCheckHint))
+		return
+	}
+	w.refuse(loc.stmt, "claim whose changed-row count no guard checks", ctx, claimCheckHint)
+}
+
+// isClaimCheck reports whether e, through parentheses, is exactly the check
+// of claim loc: <n> != 1 (S10), or for a claim over a Q7 IN list
+// <n> != int64(len(in.<List>)) with the list its IN is bound to (S11).
+func (w *walker) isClaimCheck(e ast.Expr) *local {
+	b, ok := unparen(e).(*ast.BinaryExpr)
+	if !ok || b.Op != token.NEQ {
+		return nil
+	}
+	id, ok := b.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	loc := w.locals[id.Name]
+	if loc == nil || loc.kind != "changed" {
+		return nil
+	}
+	if lit, ok := b.Y.(*ast.BasicLit); ok && !loc.multi && lit.Kind == token.INT && lit.Value == "1" {
+		return loc
+	}
+	if call, ok := b.Y.(*ast.CallExpr); ok && loc.multi {
+		if name, _, ok := w.lenOfList(call); ok && name == loc.list {
+			return loc
+		}
+	}
+	return nil
+}
+
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
 	}
 }
 
@@ -140,6 +204,9 @@ func (w *walker) claimCond(c sqlCond, vals map[string]string, table string) stri
 			parts[i] = w.claimCond(a, vals, table)
 		}
 		return fmt.Sprintf(t("paren"), strings.Join(parts, " or "))
+	}
+	if c.Op == "in" {
+		return fmt.Sprintf(t("where in"), c.Col, vals[c.Val.Param])
 	}
 	if v := c.Val; v.Kind == "param" && vals[v.Param] == t("clock") {
 		if v.Op == "" {
@@ -453,11 +520,16 @@ func (w *walker) stopStates(cond ast.Expr) map[int]string {
 }
 
 // passGuard records what is known once guard condition cond was false: after
-// "if <n> != 1 { stop }" exactly one row changed, after "if <n> == 0 { stop }"
-// at least one did.
+// "if <n> != 1 { stop }" exactly one row changed, after
+// "if <n> != int64(len(in.<List>)) { stop }" one per entry, after
+// "if <n> == 0 { stop }" at least one did.
 func (w *walker) passGuard(cond ast.Expr) {
+	if loc := w.isClaimCheck(cond); loc != nil {
+		w.wrote[loc.step] = wroteSome // S10: exactly one row; S11: one row per entry of the list (at least one, D10)
+		return
+	}
 	loc, op, v := w.changedCheck(cond)
-	if loc != nil && ((op == token.NEQ && v == "1") || (op == token.EQL && v == "0")) {
+	if loc != nil && op == token.EQL && v == "0" {
 		w.wrote[loc.step] = wroteSome
 	}
 }
@@ -525,9 +597,12 @@ func (w *walker) post(s ast.Stmt) {
 func (w *walker) guard(s *ast.IfStmt) {
 	id := s.Body.List[0].(*ast.ReturnStmt).Results[1].(*ast.Ident).Name
 	fc := w.fids[id]
-	w.inGuard = true
 	cond := w.cond(s.Cond)
-	w.inGuard = false
+	if loc := w.isClaimCheck(s.Cond); loc != nil {
+		loc.checked = true // S10/S11: the guard's entire condition is the check
+	} else {
+		w.markNested(s.Cond)
+	}
 	step := w.addStep("guard", fmt.Sprintf(st("guard"), cond, fc.ID, statusPhrase(fc.Status), fc.Message))
 	fc.steps = append(fc.steps, step.N)
 	stop := w.stopStates(s.Cond)
@@ -542,8 +617,22 @@ func (w *walker) guard(s *ast.IfStmt) {
 	w.passGuard(s.Cond)
 }
 
+// markNested remembers, for the refusal of a claim no guard checks, a guard
+// that tests its check inside a compound condition.
+func (w *walker) markNested(cond ast.Expr) {
+	ast.Inspect(cond, func(n ast.Node) bool {
+		if e, ok := n.(ast.Expr); ok {
+			if loc := w.isClaimCheck(e); loc != nil && loc.nested == 0 {
+				loc.nested = w.fset.Position(e.Pos()).Line
+			}
+		}
+		return true
+	})
+}
+
 func (w *walker) query(s *ast.AssignStmt) {
 	call := s.Rhs[0].(*ast.CallExpr)
+	w.sliceField = ""
 	name := strings.TrimPrefix(types.ExprString(call.Fun), "a.q.")
 	result := w.define(s.Lhs[0])
 	if loc := w.locals[result]; loc != nil {
@@ -570,7 +659,11 @@ func (w *walker) query(s *ast.AssignStmt) {
 	where := func(tmpl string) string {
 		parts := make([]string, len(q.Where))
 		for i, c := range q.Where {
-			parts[i] = fmt.Sprintf(t(tmpl), c.Col, w.sqlValue(c.Val, vals, c.Col, q.Table))
+			key := tmpl
+			if c.Val.Kind == "slice" {
+				key += " in" // Q7: "`id` is one of the request's `seat_ids`"
+			}
+			parts[i] = fmt.Sprintf(t(key), c.Col, w.sqlValue(c.Val, vals, c.Col, q.Table))
 		}
 		return strings.Join(parts, " and ")
 	}
@@ -604,7 +697,7 @@ func (w *walker) query(s *ast.AssignStmt) {
 		text = fmt.Sprintf(st("insert"), singular(q.Table), q.Table, joinList(assigns), q.Name, q.File, singular(q.Table)) + " " +
 			fmt.Sprintf(st("insert fails"), w.internal())
 	case "claim":
-		*loc = local{kind: "changed", table: q.Table, stmt: s}
+		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField}
 		sets := make([]string, len(q.Values))
 		for i, v := range q.Values {
 			sets[i] = fmt.Sprintf(t("field"), v.Col, w.sqlValue(v.Val, vals, v.Col, q.Table))
@@ -693,7 +786,7 @@ func (w *walker) paramValues(call *ast.CallExpr, q *SQLQuery) map[string]string 
 				w.refuse(kv, "field "+key+" of "+typ+", which matches no parameter of query "+q.Name, "S3 query", "")
 				return nil
 			}
-			vals[p] = w.value(kv.Value)
+			vals[p] = w.paramValue(q, p, kv.Value)
 		}
 		for _, p := range q.Params {
 			if _, ok := vals[p]; !ok {
@@ -708,9 +801,37 @@ func (w *walker) paramValues(call *ast.CallExpr, q *SQLQuery) map[string]string 
 		return nil
 	}
 	for i, a := range args {
-		vals[q.Params[i]] = w.value(a)
+		vals[q.Params[i]] = w.paramValue(q, q.Params[i], a)
 	}
 	return vals
+}
+
+// paramValue renders the Go value passed for SQL parameter p of q. The list
+// of a Q7 IN (sqlc.slice(p)) takes exactly a D10 list input, in.<List>;
+// every other parameter takes a value (and never a list).
+func (w *walker) paramValue(q *SQLQuery, p string, e ast.Expr) string {
+	if q == nil || q.Slice != p {
+		return w.value(e)
+	}
+	name, json, ok := w.listInput(e)
+	if !ok {
+		w.refuse(e, "value "+types.ExprString(e)+" for IN (sqlc.slice("+p+")) that is not a list input", "Q7 IN list",
+			"Pass the request's list field (D10) itself, for example "+goName(p)+": in.SeatIDs")
+		return "?"
+	}
+	w.sliceField = name
+	return fmt.Sprintf(t("request field"), json)
+}
+
+// goName is the Go field name sqlc gives parameter p (seat_ids -> SeatIds).
+func goName(p string) string {
+	parts := strings.Split(p, "_")
+	for i, s := range parts {
+		if s != "" {
+			parts[i] = strings.ToUpper(s[:1]) + s[1:]
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 // matchName finds the SQL name that a Go field name stands for (CustomerID ~ customer_id).
@@ -737,6 +858,8 @@ func (w *walker) sqlValue(v sqlVal, vals map[string]string, col, table string) s
 		return fmt.Sprintf(t("string"), strconv.Quote(text))
 	case "next":
 		return fmt.Sprintf(t("next number"), col, table)
+	case "slice":
+		return vals[v.Param]
 	}
 	return "?"
 }
@@ -789,7 +912,7 @@ func (w *walker) let(s *ast.AssignStmt) {
 			if col == "" {
 				col = key
 			}
-			step.Bullets = append(step.Bullets, fmt.Sprintf(t("field"), col, w.value(kv.Value)))
+			step.Bullets = append(step.Bullets, fmt.Sprintf(t("field"), col, w.paramValue(w.env.queries[query], col, kv.Value)))
 		}
 		w.notes(step, false)
 	}
@@ -942,6 +1065,9 @@ func (w *walker) finish() {
 	if f.Method == "GET" && h.BadQueryWhen != "" {
 		badWhen = h.BadQueryWhen
 	}
+	if hasList(f.Input) {
+		badWhen = fmt.Sprintf(docSentences["server set when"], badWhen, h.ListWhen) // D10: ListWhen
+	}
 	if len(f.ServerSet) > 0 {
 		badWhen = fmt.Sprintf(docSentences["server set when"], badWhen, h.ServerSetWhen)
 	}
@@ -993,6 +1119,15 @@ func (w *walker) finish() {
 		}
 		f.Answers = append([]string{contract}, f.Answers...)
 	}
+}
+
+func hasList(fields []Field) bool {
+	for _, f := range fields {
+		if f.List != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func stepsPhrase(steps []int, beforeFirst bool) string {

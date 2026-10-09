@@ -20,3 +20,13 @@ CREATE TABLE IF NOT EXISTS seats (
     held_by INTEGER NOT NULL DEFAULT 0,
     held_at INTEGER NOT NULL DEFAULT 0
 );
+
+-- One row per ticket of an event (confirm_many). held_by: the session that
+-- holds the ticket ('' when nobody does), until expires_at (unix seconds).
+-- sold_to: the session it was sold to ('' while it is not sold).
+CREATE TABLE IF NOT EXISTS tickets (
+    id         INTEGER PRIMARY KEY,
+    held_by    TEXT    NOT NULL DEFAULT '',
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    sold_to    TEXT    NOT NULL DEFAULT ''
+);

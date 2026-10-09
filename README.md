@@ -21,9 +21,9 @@ copies no bridge-en source, and this repository ships no app.
 In the app (its `go.mod` is the pin):
 
 ```sh
-go get github.com/pierre10101/go-ai-bridge@v0.1.2
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.2
-bridge-en -version        # bridge-en 0.1.2
+go get github.com/pierre10101/go-ai-bridge@v0.1.3
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.3
+bridge-en -version        # bridge-en 0.1.3
 ```
 
 Install the binary of the version `go.mod` requires: `bridge-en -check` and
@@ -39,7 +39,7 @@ GitHub Release `v<version>` and check the hash.
 import (
 	"github.com/pierre10101/go-ai-bridge/runtime/assert"  // assert.Pre / assert.Post (S1, S6, M2)
 	"github.com/pierre10101/go-ai-bridge/runtime/failure" // failure.New: the F-IDs (D6)
-	"github.com/pierre10101/go-ai-bridge/runtime/httpx"   // httpx.Bind: JSON in/out, one transaction per call (H1)
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"   // httpx.Bind: JSON in/out, list inputs (D10), one transaction per call (H1)
 	"github.com/pierre10101/go-ai-bridge/runtime/page"    // page.IsPageLimit, page.NextAfter (E5, S9)
 	"github.com/pierre10101/go-ai-bridge/runtime/shape"   // shape.Has in internal/domain (M3)
 	"github.com/pierre10101/go-ai-bridge/runtime/store"   // store.Open(ctx, path, schema): SQLite
@@ -62,9 +62,9 @@ Then write slices under `features/` (see
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.2
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.3
   # with:
-  #   version: v0.1.2            # default: the version go.mod requires (go list -m)
+  #   version: v0.1.3            # default: the version go.mod requires (go list -m)
   #   method: release            # download the released binary, checked with SHA256, instead of go install
   #   working-directory: .       # the app's module root
 - run: bridge-en -check features/*/
@@ -96,10 +96,12 @@ adapter/testdata/bad/retry_loop/action.go:47:2: refused: for loop is not in the 
 cmd/bridge-en/            the CLI
 adapter/                  the compiler: grammar.go (the pattern list), templates.go (every English
                           word), parse/handle/expr.go (Go), sql.go (SQL shapes), domain.go,
-                          plumbing.go (quotes runtime/httpx), check.go (cross-checks), pin.go (go.mod pin)
+                          plumbing.go (quotes runtime/httpx), schema.go (schema.sql keys, Q7),
+                          check.go (cross-checks), pin.go (go.mod pin)
 adapter/testdata/         a parse-only fixture app (module example.com/fixtures, see its go.mod):
   good/                     slices that render, each with its golden <slice>.en and checks:
-                            claim_example (conditional claim), create_invoice (insert),
+                            claim_example (conditional claim), confirm_many (list input,
+                            IN (sqlc.slice) claim, all rows or none), create_invoice (insert),
                             list_customer_invoices (keyset page), release_example
                             (session from the cookie; what a stop says about a claim's write)
   bad/                      deliberate rule breaks and their exact refusals (want.err)
@@ -135,15 +137,17 @@ Run everything: `./scripts/ci.sh`, then `./scripts/smoke-app.sh` (needs sqlc:
 | `adapter TestClockComparisonWording`, `TestClockComparisonTable`, `TestClockComparisonWithoutOffset`, `TestClockArgInDomainCall` | the exact English of `<=`, `<`, `>`, `>=` (and `=`, `<>`) against the current time, before, after and with no offset |
 | `adapter TestSessionContract`, `TestSessionRules` | a `server:"session"` input is listed apart from the body fields with `httpx.SessionRule`; other shapes are refused (T2) |
 | `adapter TestRollbackWording` | a stop says "The write in step N is rolled back" only where a write changed rows; "Any change made" while a claim's count is unknown; "Nothing was written" under `claimed == 0` |
-| `adapter TestRefusesDeliberateRuleBreaks` | each `testdata/bad/*` is refused with exactly its `want.err` (retry loop, hidden magic, SQL shapes, check-then-write, unchecked claim, clock inside) |
+| `adapter TestRefusesDeliberateRuleBreaks` | each `testdata/bad/*` is refused with exactly its `want.err` (retry loop, hidden magic, SQL shapes, check-then-write, unchecked claim, claim checked only inside a compound condition, multi-row claim checks, list and IN shapes, clock inside) |
+| `adapter TestStrictClaimCheck` | only a guard whose entire condition is `n != 1` checks a claim; `n == 0 && n != 1`, `n != 1 \|\| ...` and `!(n == 1)` do not (S10) |
+| `adapter TestMultiRowClaimRules`, `TestMultiRowClaimWording`, `TestINShapes`, `TestPrimaryKeys` | a claim over `<key> IN (sqlc.slice(...))` is checked only by `n != int64(len(in.<List>))` with its own list; `len` nowhere else; the slice is the last parameter and, in a claim, on the `schema.sql` primary key; the exact D10/Q7/S11 English (D10, Q7, S11) |
 | `adapter TestRefusalsInHandle`, `TestSQLShapes`, `TestClaimRules`, `TestDomainUnderGrammar` | single constructs outside the grammar are refused with file:line:col |
 | `adapter TestRulebook` | intent.md F-IDs = action F-IDs = covered F-IDs; no dead SQL; routes bound via the runtime's httpx.Bind over txn.DB |
 | `adapter TestBoundNeedsTxn` | a route over a plain `*sql.DB`, or through an app's own httpx, is refused |
 | `adapter TestCheckPin`, `TestFixtureAppPinsThisVersion` | `-check` refuses a `go.mod` that pins another version, or none |
 | `adapter TestRulebookCoversGrammar` | RULEBOOK.md has exactly one section per grammar rule |
-| `runtime/httpx Test*` (incl. `TestClockRule*`, `TestSessionRule*`, `TestServerSet*`, `TestTx*`) | every HTTP and transaction sentence the English quotes |
+| `runtime/httpx Test*` (incl. `TestClockRule*`, `TestSessionRule*`, `TestServerSet*`, `TestTx*`, `TestList*`) | every HTTP and transaction sentence the English quotes; a list input that is empty, too long, repeats an entry or has a null or wrongly typed entry is HTTP 400 |
 | `runtime/{assert,page,shape,store} Test*` | the other runtime primitives the English relies on |
-| `testdata/good/*/checks` (run by `smoke-app.sh`) | each fixture failure case fires and writes nothing; the claim's 599/600-second boundary |
+| `testdata/good/*/checks` (run by `smoke-app.sh`) | each fixture failure case fires and writes nothing; the claim's 599/600-second boundary; confirm_many against SQLite with sqlc's `sqlc.slice` code: all confirmed, one expired (nothing written), one not held by this session (all rolled back), empty or repeated list (400), concurrent calls on separate connections (sold once) |
 
 ## License
 

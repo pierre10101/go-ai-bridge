@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
 // Field is one Input/Output field.
@@ -22,6 +24,8 @@ type Field struct {
 	Name, JSON, Type, Line string
 	Domain                 string // domain type name, for domain.<T> fields
 	ServerSet              string // "clock" (T1, `clock:"now"`) or "session" (T2, `server:"session"`): filled by httpx, never sent
+	List                   string // D10 list input: the element type (int64 or string); "" for any other field
+	pos                    token.Position
 }
 
 // FailureCase is a D6 declaration plus every S2 guard that raises it.
@@ -83,19 +87,19 @@ var statusCodes = map[string]int{
 }
 
 type walker struct {
-	fset    *token.FileSet
-	env     *env
-	f       *Feature
-	errs    Refusals
-	locals  map[string]*local
-	fids    map[string]*FailureCase
-	pkgs    map[string]bool
-	writes  []int          // step numbers of writes so far
-	wrote   map[int]string // write step -> what it may have changed by now: wroteSome or wroteMaybe
-	readAt  map[string]int // W1: table -> step of the first read query (Q1, Q2, Q5) of it
-	inGuard bool           // rendering an S2 guard condition (S10 marks its claim checked)
-	asserts []string       // domain assertions met while rendering the current statement
-	panics  bool           // a domain function met in the current statement calls panic
+	fset       *token.FileSet
+	env        *env
+	f          *Feature
+	errs       Refusals
+	locals     map[string]*local
+	fids       map[string]*FailureCase
+	pkgs       map[string]bool
+	writes     []int          // step numbers of writes so far
+	wrote      map[int]string // write step -> what it may have changed by now: wroteSome or wroteMaybe
+	readAt     map[string]int // W1: table -> step of the first read query (Q1, Q2, Q5) of it
+	sliceField string         // the list input (Go field name) passed to the current query's Q7 IN list
+	asserts    []string       // domain assertions met while rendering the current statement
+	panics     bool           // a domain function met in the current statement calls panic
 }
 
 // local is a name defined in Handle and how the English refers to it.
@@ -111,7 +115,10 @@ type local struct {
 	limit   string   // rows: the English of the page query's LIMIT value
 	step    int      // list: the step that built it; changed: the claim step
 	stmt    ast.Node // changed: the Q6 query statement (S10 refusals point here)
-	checked bool     // changed: an S2 guard stops unless exactly one row changed (S10)
+	checked bool     // changed: a guard whose entire condition is the S10 (or S11) check
+	multi   bool     // changed: a claim over <key> IN (sqlc.slice(...)) (Q7), checked by S11
+	list    string   // changed, multi: the list input (Go field name) its IN list is bound to
+	nested  int      // changed: the line of the first guard that tests the check inside a compound condition
 }
 
 // ParseAction parses <dir>/action.go and <dir>/queries/*.sql, reads the
@@ -286,7 +293,19 @@ func (w *walker) fields(ts *ast.TypeSpec, ctx string, limit bool) []Field {
 			continue
 		}
 		name := fl.Names[0].Name
-		typ, dom := w.fieldType(fl.Type, ctx)
+		var typ, dom, list string
+		listTag, hasList := structTagOK(fl.Tag, "list")
+		if at, ok := fl.Type.(*ast.ArrayType); ok && at.Len == nil && ctx == "D4 input" {
+			typ, list = w.listType(fl, name, at, listTag, hasList)
+		} else {
+			typ, dom = w.fieldType(fl.Type, ctx)
+			switch {
+			case hasList && ctx != "D4 input":
+				w.refuse(fl, "list tag on "+name+" outside Input", "D10 list input", "Only an Input field can be a list input")
+			case hasList:
+				w.refuse(fl, "list tag on "+name+" of type "+types.ExprString(fl.Type), "D10 list input", listHint)
+			}
+		}
 		tag := jsonTag(fl.Tag)
 		if tag == "" {
 			w.refuse(fl, "field "+name+" without a json tag", ctx, "Add `json:\"snake_name\"`")
@@ -335,7 +354,7 @@ func (w *walker) fields(ts *ast.TypeSpec, ctx string, limit bool) []Field {
 		case structTag(fl.Tag, "query") != "":
 			line = fmt.Sprintf(docSentences["query field"], tag, typ)
 		}
-		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, ServerSet: server})
+		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, ServerSet: server, List: list, pos: w.fset.Position(fl.Pos())})
 	}
 	if limit && len(out) > MaxInputFields {
 		w.refuse(ts, fmt.Sprintf("Input with %d fields", len(out)), "hard limit", fmt.Sprintf("At most %d fields", MaxInputFields))
@@ -361,7 +380,7 @@ func (w *walker) fieldType(e ast.Expr, ctx string) (string, string) {
 			return "", ""
 		}
 		if ctx != "D5 output" {
-			w.refuse(e, "field type "+types.ExprString(e), ctx, "List fields are only on Output (D5); Input stays scalar")
+			w.refuse(e, "field type "+types.ExprString(e), ctx, listHint)
 			return "", ""
 		}
 		sel, ok := e.Elt.(*ast.SelectorExpr)
@@ -381,8 +400,39 @@ func (w *walker) fieldType(e ast.Expr, ctx string) (string, string) {
 		}
 		return list, sel.Sel.Name
 	}
-	w.refuse(e, "field type "+types.ExprString(e), ctx, "Use int64, string, bool, domain.<T> or (on Output) []domain.<T>")
+	w.refuse(e, "field type "+types.ExprString(e), ctx, "Use int64, string, bool, domain.<T>, (on Input) a D10 list []int64 or []string, or (on Output) []domain.<T>")
 	return "", ""
+}
+
+// listType renders a D10 list input: []int64 or []string tagged
+// list:"<min>..<max>". The words are runtime/httpx's ListRule (or
+// ListRuleExact) and ListElems; the bounds come from the tag, parsed by
+// httpx.ParseListTag, the same function Bind uses.
+func (w *walker) listType(fl *ast.Field, name string, at *ast.ArrayType, tag string, hasTag bool) (string, string) {
+	const ctx = "D10 list input"
+	elem := types.ExprString(at.Elt)
+	words, ok := w.env.http.ListElems[elem]
+	switch {
+	case !ok:
+		w.refuse(fl, "list field "+name+" of type "+types.ExprString(at), ctx, listHint)
+		return "?", ""
+	case !hasTag:
+		w.refuse(fl, "list field "+name+" without a list tag", ctx, listHint)
+		return "?", ""
+	case structTag(fl.Tag, "path") != "" || structTag(fl.Tag, "query") != "":
+		w.refuse(fl, "list field "+name+" with a path or query tag", ctx, "A list input is sent in the JSON body of a POST, PUT, PATCH or DELETE")
+		return "?", ""
+	}
+	min, max, err := httpx.ParseListTag(tag)
+	if err != nil {
+		w.refuse(fl, "list field "+name+" whose "+err.Error(), ctx, listHint)
+		return "?", ""
+	}
+	rule := w.env.http.ListRule
+	if min == max {
+		rule = w.env.http.ListRuleExact
+	}
+	return strings.NewReplacer("{min}", strconv.Itoa(min), "{max}", strconv.Itoa(max), "{elems}", words).Replace(rule), elem
 }
 
 // domainTypePhrase is the `// bridge-en:` display name of a domain type. With full,
@@ -492,9 +542,15 @@ func humanize(snake string) string {
 
 // structTag returns the value of key in a struct field tag.
 func structTag(tag *ast.BasicLit, key string) string {
+	v, _ := structTagOK(tag, key)
+	return v
+}
+
+// structTagOK is structTag, and whether the tag has key at all.
+func structTagOK(tag *ast.BasicLit, key string) (string, bool) {
 	if tag == nil {
-		return ""
+		return "", false
 	}
 	s, _ := strconv.Unquote(tag.Value)
-	return reflect.StructTag(s).Get(key)
+	return reflect.StructTag(s).Lookup(key)
 }

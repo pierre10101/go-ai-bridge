@@ -57,6 +57,10 @@ var exprTemplates = map[string]string{
 	"count value": "the number of %s whose %s",
 	"where is":    "`%s` is %s",
 	"where has":   "`%s` equal to %s",
+	// Q7 IN lists in reads and claims.
+	"where is in":  "`%s` is one of %s",
+	"where has in": "`%s` equal to one of %s",
+	"where in":     "`%s` is one of %s",
 	// SQL values (Q4, Q3 next number).
 	"next number": "one more than the largest `%s` in `%s` (1 if there is none)",
 	// Q6 claim conditions and values.
@@ -107,6 +111,8 @@ var exprTemplates = map[string]string{
 	"changed one":     "exactly one %s was changed in step %d",
 	"changed not one": "not exactly one %s was changed in step %d",
 	"changed value":   "the number of %s changed in step %d",
+	// S11: a claim over a Q7 IN list against the length of its list.
+	"changed not len": "the number of %s changed in step %d is not the number of %s in %s",
 }
 
 // Domain function templates (M2/M3), used to render a domain function's body.

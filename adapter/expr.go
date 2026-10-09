@@ -71,6 +71,9 @@ func (w *walker) countCond(e *ast.BinaryExpr) string {
 	if loc != nil && loc.kind == "changed" {
 		return w.changedCond(e, loc)
 	}
+	if loc != nil && loc.kind == "unknown" {
+		return "?" // its query was refused already; do not refuse its comparisons too
+	}
 	lit, ok := e.Y.(*ast.BasicLit)
 	if loc == nil || loc.kind != "count" || !ok || lit.Kind != token.INT {
 		return ""
@@ -84,23 +87,47 @@ func (w *walker) countCond(e *ast.BinaryExpr) string {
 	return ""
 }
 
-// changedCond renders the S10 claim check on a Q6 result: <n> != 1 (the
-// check S10 requires), <n> == 1 and <n> == 0. Any other comparison is refused.
+// changedCond renders a comparison on a Q6 claim's changed-row count:
+// <n> != 1 (the S10 check), <n> == 1 and <n> == 0; for a claim over a Q7 IN
+// list, <n> != int64(len(in.<List>)) (the S11 check) and <n> == 0. Any other
+// comparison is refused. Only a guard whose entire condition is the check
+// marks the claim checked (see guard and isClaimCheck).
 func (w *walker) changedCond(e *ast.BinaryExpr, loc *local) string {
+	if call, ok := e.Y.(*ast.CallExpr); ok {
+		if name, json, ok := w.lenOfList(call); ok {
+			switch {
+			case !loc.multi:
+				w.refuse(e, "comparison "+types.ExprString(e)+" on a single-row claim's changed-row count", "S11 multi-row claim check",
+					"Only a claim over <key> IN (sqlc.slice(<name>)) (Q7) is compared with the length of a list; check a single-row claim with != 1 (S10)")
+			case e.Op != token.NEQ:
+				w.refuse(e, "comparison "+types.ExprString(e)+" on a claim's changed-row count", "S11 multi-row claim check",
+					strings.NewReplacer("<changed>", types.ExprString(e.X), "<List>", loc.list).Replace(multiCheckHint))
+			case name != loc.list:
+				w.refuse(e, "comparison with the length of in."+name+", which is not the list of the claim in step "+fmt.Sprint(loc.step)+" (in."+loc.list+")",
+					"S11 multi-row claim check", strings.NewReplacer("<changed>", types.ExprString(e.X), "<List>", loc.list).Replace(multiCheckHint))
+			default:
+				return fmt.Sprintf(t("changed not len"), plural(loc.table), loc.step, plural(loc.table), fmt.Sprintf(t("request field"), json))
+			}
+			return "?"
+		}
+	}
 	lit, ok := e.Y.(*ast.BasicLit)
 	key := ""
 	if ok && lit.Kind == token.INT {
 		switch {
-		case e.Op == token.NEQ && lit.Value == "1":
+		case e.Op == token.NEQ && lit.Value == "1" && !loc.multi:
 			key = "changed not one"
-			if w.inGuard {
-				loc.checked = true
-			}
-		case e.Op == token.EQL && lit.Value == "1":
+		case e.Op == token.EQL && lit.Value == "1" && !loc.multi:
 			key = "changed one"
 		case e.Op == token.EQL && lit.Value == "0":
 			key = "changed none"
 		}
+	}
+	if key == "" && loc.multi {
+		w.refuse(e, "comparison "+types.ExprString(e)+" on a multi-row claim's changed-row count", "S11 multi-row claim check",
+			"Compare the count of a claim over IN (sqlc.slice(...)) only as == 0 or in the check. "+
+				strings.NewReplacer("<changed>", types.ExprString(e.X), "<List>", loc.list).Replace(multiCheckHint))
+		return "?"
 	}
 	if key == "" {
 		w.refuse(e, "comparison "+types.ExprString(e)+" on a claim's changed-row count", "S10 claim check",
@@ -108,6 +135,36 @@ func (w *walker) changedCond(e *ast.BinaryExpr, loc *local) string {
 		return "?"
 	}
 	return fmt.Sprintf(t(key), singular(loc.table), loc.step)
+}
+
+// listInput matches in.<Field> where Field is a D10 list input.
+func (w *walker) listInput(e ast.Expr) (name, json string, ok bool) {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return "", "", false
+	}
+	root, ok := sel.X.(*ast.Ident)
+	if !ok || w.locals[root.Name] == nil || w.locals[root.Name].kind != "request" {
+		return "", "", false
+	}
+	for _, f := range w.f.Input {
+		if f.Name == sel.Sel.Name && f.List != "" {
+			return f.Name, f.JSON, true
+		}
+	}
+	return "", "", false
+}
+
+// lenOfList matches int64(len(in.<List>)), the only place len is allowed (S11).
+func (w *walker) lenOfList(c *ast.CallExpr) (name, json string, ok bool) {
+	if types.ExprString(c.Fun) != "int64" || len(c.Args) != 1 {
+		return "", "", false
+	}
+	inner, ok := c.Args[0].(*ast.CallExpr)
+	if !ok || types.ExprString(inner.Fun) != "len" || len(inner.Args) != 1 {
+		return "", "", false
+	}
+	return w.listInput(inner.Args[0])
 }
 
 // operand wraps a mixed &&/|| sub-expression in parentheses.
@@ -157,7 +214,7 @@ func (w *walker) value(e ast.Expr) string {
 			w.refuse(e, "clock read "+types.ExprString(e.Fun), "T1 time is passed in", clockHint)
 			return "?"
 		}
-		w.refuse(e, "call to "+types.ExprString(e.Fun), ctx, "E5: only domain.<Func>(...) and page.IsPageLimit(...) calls; queries go through S3")
+		w.refuse(e, "call to "+types.ExprString(e.Fun), ctx, "E5: only domain.<Func>(...) and page.IsPageLimit(...) calls; queries go through S3; len only as int64(len(in.<List>)) in the S11 check")
 	case *ast.CompositeLit:
 		typ := w.recordType(e)
 		if typ == "" {
@@ -306,6 +363,10 @@ func (w *walker) selector(e *ast.SelectorExpr) (string, bool) {
 			for _, f := range fields {
 				if f.Name == path[0] && f.ServerSet != "" {
 					return t(f.ServerSet), true // "the current time" (T1), "the session" (T2)
+				}
+				if f.Name == path[0] && f.List != "" {
+					w.refuse(e, "list input "+types.ExprString(e)+" used as a value", "D10 list input", listUseHint)
+					return "", false
 				}
 			}
 		}
