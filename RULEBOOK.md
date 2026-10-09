@@ -104,10 +104,9 @@ go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
 diff of every `.en` file, commit. 0.7.0 lets a Q5 page omit equality
-filters, fills `path:"..."` on every method (never from the body), treats
-`after=0` as the start of a list, refuses non-ASCII in SQL files, and
-accepts an optional `// bridge-en-plural:`; see README.md, "0.6.x to
-0.7.0". 0.6.0 adds DELETE (Q10): a delete names
+filters, fills `path:"..."` on every method (never from the body), refuses
+non-ASCII in SQL files, and accepts an optional `// bridge-en-plural:`;
+see README.md, "0.6.x to 0.7.0". 0.6.0 adds DELETE (Q10): a delete names
 its rows by the table's key, is checked like a claim (S10), is limited to
 the caller's rows on owned (A4) and child (A5) tables exactly like an
 update, and is refused unless every foreign key that references the table
@@ -340,8 +339,10 @@ fields the caller sends. Every method may take `path:"<name>"` (filled from the 
 contain `{<name>}`); on a non-GET the field is not sent in the JSON body
 (a body that carries it is HTTP 400). GET fields may also take
 `query:"<name>"`, and a GET request that sends any other query parameter is
-answered with HTTP 400 (T4). On GET, omit `after` or send `0` for the start
-of a keyset list (both become `page.StartCursor`).
+answered with HTTP 400 (T4). On GET, omit `after` for the start of a keyset
+list (Bind fills `page.StartCursor`); `after=0` is not the start — the
+answer's `next_after` is 0 when there is no next page, and sending that
+back as `after` is refused (F3).
 
 ```go
 type Input struct {
@@ -822,7 +823,9 @@ equality filters before the cursor are optional (a whole-table / public
 catalog page is only the cursor). `:many` only, GET slices only, no OFFSET;
 the action guards its limit with `page.IsPageLimit`
 (`runtime/page`, with `page.MaxPageSize` 100 and `page.DefaultPageSize` 20).
-Omit `after` or send `0` for the newest page (both become `page.StartCursor`).
+Omit `after` for the newest page (Bind fills `page.StartCursor`). Do not
+send `after=0`: that value means "no next page" in `next_after`, and the
+fixture refuses it with F3 so a client that follows `next_after` stops.
 
 English: `5. Read: list the invoices whose `customer_id` is the request's `customer_id` and whose `seq` is less than the request's `after`, highest `seq` first, at most the request's `limit` of them (...). Call them the listed invoices; there may be none.` / bare: `Read: list the books whose `id` is less than the request's `after`, highest `id` first, ...`
 

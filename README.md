@@ -38,7 +38,7 @@ compare the two: what was asked, and what was built.
   refuses the delete (ON DELETE RESTRICT)".
 - A keyset list (Q5) may be the whole table (`WHERE id < ? ORDER BY id DESC
   LIMIT ?`); `path:"id"` works on PATCH/POST/DELETE as well as GET (filled
-  from the URL, never from the body); `after=0` means the start of a list.
+  from the URL, never from the body).
 - Requests are strict: a body field or a GET query parameter the action
   does not declare is answered with HTTP 400.
 - [RULEBOOK.md](RULEBOOK.md) is the reference: every rule with an example, its
@@ -252,7 +252,7 @@ git diff                         # review every .en change, then open a PR
 A new version can change the English of every feature (new wording, new
 rules); the `.en` diff in that pull request shows exactly how.
 
-### 0.6.x to 0.7.0: lists, path inputs, after=0
+### 0.6.x to 0.7.0: lists, path inputs
 
 0.7.0 is **mostly additive**. Apps that already compile against 0.6 stay
 accepted; their `.en` files may change in two places and should be
@@ -265,13 +265,14 @@ regenerated (`bridge-en -write features/*/`) then reviewed:
    field from the URL; a body that also carries it is HTTP 400. The English
    lists path values apart from the JSON body (see the fixture
    `rename_event`: `PATCH /events/{id}/title`).
-3. **`after=0` means the start of the list**, same as omitting `after`
-   (both become `page.StartCursor`). Refuse only a negative cursor in the
-   action if you still want an F-ID for that.
-4. **Non-ASCII in `schema.sql` / `queries/*.sql` is refused** at `-check`
+3. **Non-ASCII in `schema.sql` / `queries/*.sql` is refused** at `-check`
    (sqlc's SQLite parser can mis-tokenise an em dash in a comment).
-5. **Optional `// bridge-en-plural:`** on a domain type overrides the naive
+4. **Optional `// bridge-en-plural:`** on a domain type overrides the naive
    last-word plural for list English.
+
+Paging is unchanged from 0.6: omit `after` for the first page (Bind fills
+`page.StartCursor`); `next_after: 0` means there is no next page — do not
+send that 0 back as `after` (the list fixture refuses `after <= 0` with F3).
 
 Move the pin and the binary to v0.7.0, run `bridge-en init -force`, then
 `-write` every slice and review the `.en` diff.

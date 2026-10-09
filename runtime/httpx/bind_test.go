@@ -194,8 +194,10 @@ func TestGETPathQueryDefaults(t *testing.T) {
 	}
 }
 
-// after=0 means the start of the list, same as omitting after (QueryInputRule).
-func TestGETAfterZeroIsStartCursor(t *testing.T) {
+// after=0 is passed through as 0 (not remapped to StartCursor). next_after: 0
+// means "last page"; a client that reused it as after would loop forever if
+// Bind treated 0 as the start of the list. Omit after for the first page.
+func TestGETAfterZeroIsPassedThrough(t *testing.T) {
 	mux := http.NewServeMux()
 	var got listIn
 	mux.Handle("GET /customers/{id}/invoices", Bind(Public, func(_ context.Context, in listIn) (out, error) {
@@ -207,8 +209,8 @@ func TestGETAfterZeroIsStartCursor(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
-	if got.After != page.StartCursor {
-		t.Fatalf("after=0: got %d, want StartCursor", got.After)
+	if got.After != 0 {
+		t.Fatalf("after=0: got %d, want 0 (not StartCursor)", got.After)
 	}
 }
 

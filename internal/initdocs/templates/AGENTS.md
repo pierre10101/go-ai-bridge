@@ -124,9 +124,9 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
   answered with HTTP 400, like an unknown body field. The UI sends exactly
   the declared `query:"..."` values. On any method, `path:"id"` is filled
   from the URL (`{id}` in the route); do not also put it in the JSON body.
-  For a keyset list, omit `after` or send `0` for the first page. A Q5 page
-  may be cursor-only (`WHERE id < ? ORDER BY id DESC LIMIT ?`) with no
-  equality filter.
+  For a keyset list, omit `after` for the first page (`next_after: 0` means
+  stop, not restart). A Q5 page may be cursor-only (`WHERE id < ? ORDER BY
+  id DESC LIMIT ?`) with no equality filter.
 - **Claims are one conditional UPDATE.** Check and write in one statement
   (`UPDATE ... WHERE id = ? AND <condition>`, `:execrows`), then stop unless
   exactly one row changed: `if n != 1 { return Output{}, F<n> }`. For a list,

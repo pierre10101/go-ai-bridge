@@ -22,7 +22,7 @@ const StrictQueryRule = "The query string is as strict as a body: a query parame
 // QueryInputRule is how Bind treats GET path and query inputs (quoted by
 // bridge-en). The page sizes themselves live only in runtime/page
 // (MaxPageSize, DefaultPageSize); bridge-en states them from there.
-const QueryInputRule = "Path values are required. A query value may be left out: `limit` is then the default page size and `after` starts the list at the newest row (omit it, or send `0`; both mean the start of the list). A missing path value, or a value that is not a whole number, is answered with HTTP 400 below and the action does not run."
+const QueryInputRule = "Path values are required. A query value may be left out: `limit` is then the default page size and `after` starts the list at the newest row. A missing path value, or a value that is not a whole number, is answered with HTTP 400 below and the action does not run."
 
 // PathBodyRule is how Bind treats path-tagged fields on a non-GET request
 // (quoted by bridge-en): they come from the URL only; a body that also
@@ -106,19 +106,6 @@ func decodeParams[I any](r *http.Request) (I, string) {
 			}
 			if len(raw) != 1 {
 				return in, fmt.Sprintf("query parameter %q must appear once", queryName)
-			}
-			if queryName == "after" {
-				n, err := strconv.ParseInt(strings.TrimSpace(raw[0]), 10, 64)
-				if err != nil {
-					return in, "query after must be a whole number"
-				}
-				// 0 means "start of the list", same as omitting after.
-				if n == 0 {
-					fv.SetInt(page.StartCursor)
-				} else {
-					fv.SetInt(n)
-				}
-				continue
 			}
 			if msg := setInt64Field(fv, raw[0], "query "+queryName); msg != "" {
 				return in, msg

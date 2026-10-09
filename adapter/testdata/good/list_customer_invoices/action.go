@@ -40,7 +40,7 @@ type Output struct {
 var (
 	F1 = failure.New("F1", http.StatusUnprocessableEntity, "customer does not exist")
 	F2 = failure.New("F2", http.StatusBadRequest, "page limit is out of range")
-	F3 = failure.New("F3", http.StatusBadRequest, "page cursor must not be negative")
+	F3 = failure.New("F3", http.StatusBadRequest, "page cursor must be greater than zero")
 )
 
 // Action lists one page of a customer's invoices.
@@ -57,12 +57,13 @@ func New(q *db.Queries) *Action {
 //
 // No preconditions: every value comes from the request (F1-F3) or the database.
 // httpx.Bind runs a GET in one read-only transaction (no write lock).
-// Bind maps a missing or zero `after` to page.StartCursor before Handle runs.
+// Bind maps a missing `after` to page.StartCursor before Handle runs; after=0
+// is refused here (F3) so a client that follows next_after: 0 cannot restart.
 func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	if !page.IsPageLimit(in.Limit) {
 		return Output{}, F2
 	}
-	if in.After < 0 {
+	if in.After <= 0 {
 		return Output{}, F3
 	}
 

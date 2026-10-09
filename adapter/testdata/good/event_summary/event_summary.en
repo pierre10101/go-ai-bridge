@@ -10,7 +10,7 @@ Who may call it: anyone, signed in or not.
 
 The request has no JSON body. It takes these values from the path and the query string:
 - `event_id`, from the path (`{id}`): a whole number.
-Path values are required. A query value may be left out: `limit` is then the default page size and `after` starts the list at the newest row (omit it, or send `0`; both mean the start of the list). A missing path value, or a value that is not a whole number, is answered with HTTP 400 below and the action does not run. The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
+Path values are required. A query value may be left out: `limit` is then the default page size and `after` starts the list at the newest row. A missing path value, or a value that is not a whole number, is answered with HTTP 400 below and the action does not run. The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
 
 The action also takes these 2 values, which the caller does not send:
 - `user`: set by the server: the signed-in user (from the app's sign-in session), or 0 when the caller is not signed in; the caller does not send it, and a request that does is answered with HTTP 400 below.
