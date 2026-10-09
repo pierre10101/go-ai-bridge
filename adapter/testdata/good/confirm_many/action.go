@@ -1,6 +1,7 @@
 // Package confirm_many is a fixture slice: it proves how bridge-en renders
 // D10 (a list input with bounds and no duplicates), Q7 (IN (sqlc.slice(...))
-// in a claim and in reads) and S11 (a multi-row claim must change exactly one
+// in a claim and in reads), a Q1 read that compares with the current time
+// (T1) before its IN list, and S11 (a multi-row claim must change exactly one
 // row per entry of the list, or everything is rolled back). RULEBOOK.md
 // quotes confirm_many.en; scripts/smoke-app.sh builds it in a new app and
 // runs its checks against SQLite.
@@ -49,7 +50,7 @@ func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 		return Output{}, err
 	}
 
-	held, err := a.q.CountStillHeld(ctx, db.CountStillHeldParams{Session: in.Session, Ids: in.TicketIDs})
+	held, err := a.q.CountStillHeld(ctx, db.CountStillHeldParams{Session: in.Session, Now: in.Now, Ids: in.TicketIDs})
 	if err != nil {
 		return Output{}, err
 	}

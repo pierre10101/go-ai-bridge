@@ -92,7 +92,7 @@ func TestMultiRowClaimRules(t *testing.T) {
 		"reversed":          {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "int64(len(in.TicketIDs)) != confirmed"}, "refused: call to int64 is not in the allowed pattern list (expression)"},
 		"equals":            {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed == int64(len(in.TicketIDs))"}, "refused: comparison confirmed == int64(len(in.TicketIDs)) on a claim's changed-row count is not in the allowed pattern list (S11 multi-row claim check)"},
 		"no conversion":     {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed != len(in.TicketIDs)"}, "refused: comparison confirmed != len(in.TicketIDs) on a multi-row claim's changed-row count"},
-		"compound":          {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed != int64(len(in.TicketIDs)) || held != 0"}, "refused: claim whose changed-row count is checked only inside a compound condition (line 59) is not in the allowed pattern list (S11 multi-row claim check)"},
+		"compound":          {[3]string{"", "confirmed != int64(len(in.TicketIDs))", "confirmed != int64(len(in.TicketIDs)) || held != 0"}, "refused: claim whose changed-row count is checked only inside a compound condition (line 60) is not in the allowed pattern list (S11 multi-row claim check)"},
 		"len elsewhere":     {[3]string{"", "Output{Confirmed: confirmed}", "Output{Confirmed: int64(len(in.TicketIDs))}"}, "refused: call to int64 is not in the allowed pattern list (expression)"},
 		"list as a value":   {[3]string{"", "\tif held != 0 {", "\tif in.TicketIDs == nil {\n\t\treturn Output{}, F2\n\t}\n\tif held != 0 {"}, "refused: list input in.TicketIDs used as a value is not in the allowed pattern list (D10 list input)"},
 		"scalar for slice":  {[3]string{"", "Now: in.Now, Ids: in.TicketIDs}", "Now: in.Now, Ids: in.Now}"}, "refused: value in.Now for IN (sqlc.slice(ids)) that is not a list input is not in the allowed pattern list (Q7 IN list)"},
@@ -138,7 +138,7 @@ func TestMultiRowClaimRules(t *testing.T) {
 	}{
 		"exact bounds":  {[3]string{"", `list:"1..20"`, `list:"3..3"`}, "- `ticket_ids`: a list of exactly 3 whole numbers with no duplicates.\n"},
 		"text list":     {[3]string{"", "TicketIDs []int64", "TicketIDs []string"}, "- `ticket_ids`: a list of 1 to 20 text values with no duplicates.\n"},
-		"nothing first": {[3]string{"", "\tif held != 0 {", "\tif confirmed == 0 && held != 0 {"}, "4. If no ticket was changed in step 2 and at least one ticket has `held_by` equal to the session from the cookie and `id` equal to one of the request's `ticket_ids`, stop with F2: HTTP 410 Gone \"a hold has expired\".\n   Nothing was written in step 2, so there is nothing to roll back.\n"},
+		"nothing first": {[3]string{"", "\tif held != 0 {", "\tif confirmed == 0 && held != 0 {"}, "4. If no ticket was changed in step 2 and there is at least one ticket whose `held_by` is the session from the cookie and `expires_at` is no later than the current time and `id` is one of the request's `ticket_ids`, stop with F2: HTTP 410 Gone \"a hold has expired\".\n   Nothing was written in step 2, so there is nothing to roll back.\n"},
 	}
 	for name, tc := range accepted {
 		t.Run("ok/"+name, func(t *testing.T) {
@@ -164,7 +164,7 @@ func TestMultiRowClaimWording(t *testing.T) {
 		"- `ticket_ids`: a list of 1 to 20 whole numbers with no duplicates.\n",
 		"; or a list has fewer or more entries than allowed above, has the same entry twice, or has an entry that is null; or the request sends a value that the server sets",
 		"on each ticket whose `held_by` is the session from the cookie and `expires_at` is later than the current time and `id` is one of the request's `ticket_ids` at that moment",
-		"3. Read: count the tickets whose `held_by` is the session from the cookie and `id` is one of the request's `ticket_ids` (query `CountStillHeld` in queries/tickets_after.sql). If the query fails, stop with HTTP 500 Internal Server Error.\n   Any change made in step 2 is rolled back.\n",
+		"3. Read: count the tickets whose `held_by` is the session from the cookie and `expires_at` is no later than the current time and `id` is one of the request's `ticket_ids` (query `CountStillHeld` in queries/tickets_after.sql). If the query fails, stop with HTTP 500 Internal Server Error.\n   Any change made in step 2 is rolled back.\n",
 		"5. If the number of tickets changed in step 2 is not the number of tickets in the request's `ticket_ids`, stop with F3: HTTP 409 Conflict \"a ticket is not held by this session\".\n   Any change made in step 2 is rolled back.\n",
 		// after the S11 check: one row per entry changed, so a write happened
 		"6. Read: count the tickets whose `sold_to` is the session from the cookie and `id` is one of the request's `ticket_ids` (query `CountSold` in queries/tickets_after.sql). If the query fails, stop with HTTP 500 Internal Server Error.\n   The write in step 2 is rolled back.\n",

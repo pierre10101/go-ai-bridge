@@ -21,9 +21,9 @@ copies no bridge-en source, and this repository ships no app.
 In the app (its `go.mod` is the pin):
 
 ```sh
-go get github.com/pierre10101/go-ai-bridge@v0.1.3
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.3
-bridge-en -version        # bridge-en 0.1.3
+go get github.com/pierre10101/go-ai-bridge@v0.1.4
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.4
+bridge-en -version        # bridge-en 0.1.4
 ```
 
 Install the binary of the version `go.mod` requires: `bridge-en -check` and
@@ -62,9 +62,9 @@ Then write slices under `features/` (see
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.3
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.4
   # with:
-  #   version: v0.1.3            # default: the version go.mod requires (go list -m)
+  #   version: v0.1.4            # default: the version go.mod requires (go list -m)
   #   method: release            # download the released binary, checked with SHA256, instead of go install
   #   working-directory: .       # the app's module root
 - run: bridge-en -check features/*/
@@ -101,7 +101,8 @@ adapter/                  the compiler: grammar.go (the pattern list), templates
 adapter/testdata/         a parse-only fixture app (module example.com/fixtures, see its go.mod):
   good/                     slices that render, each with its golden <slice>.en and checks:
                             claim_example (conditional claim), confirm_many (list input,
-                            IN (sqlc.slice) claim, all rows or none), create_invoice (insert),
+                            IN (sqlc.slice) claim, all rows or none, a read compared with
+                            the current time), create_invoice (insert),
                             list_customer_invoices (keyset page), release_example
                             (session from the cookie; what a stop says about a claim's write)
   bad/                      deliberate rule breaks and their exact refusals (want.err)
@@ -135,9 +136,10 @@ Run everything: `./scripts/ci.sh`, then `./scripts/smoke-app.sh` (needs sqlc:
 |---|---|
 | `adapter TestGoldenEnglish` | each `testdata/good/<slice>` renders to its committed `<slice>.en`, byte for byte |
 | `adapter TestClockComparisonWording`, `TestClockComparisonTable`, `TestClockComparisonWithoutOffset`, `TestClockArgInDomainCall` | the exact English of `<=`, `<`, `>`, `>=` (and `=`, `<>`) against the current time, before, after and with no offset |
+| `adapter TestClockComparisonInReads`, `TestClockInReadShapes` | a Q1 count or Q2 one-row read compares a column with the current time in the same Q6 words (a guard on the count says "there is at least one ... whose ..."); only when the action passes its clock input `in.Now` itself; never with a literal, on the left, in a keyset page or after the IN list (Q1, Q2, T1, Q7) |
 | `adapter TestSessionContract`, `TestSessionRules` | a `server:"session"` input is listed apart from the body fields with `httpx.SessionRule`; other shapes are refused (T2) |
 | `adapter TestRollbackWording` | a stop says "The write in step N is rolled back" only where a write changed rows; "Any change made" while a claim's count is unknown; "Nothing was written" under `claimed == 0` |
-| `adapter TestRefusesDeliberateRuleBreaks` | each `testdata/bad/*` is refused with exactly its `want.err` (retry loop, hidden magic, SQL shapes, check-then-write, unchecked claim, claim checked only inside a compound condition, multi-row claim checks, list and IN shapes, clock inside) |
+| `adapter TestRefusesDeliberateRuleBreaks` | each `testdata/bad/*` is refused with exactly its `want.err` (retry loop, hidden magic, SQL shapes, check-then-write, unchecked claim, claim checked only inside a compound condition, multi-row claim checks, list and IN shapes, clock inside, a read compared with something other than the clock input, the clock where a read may not compare with it) |
 | `adapter TestStrictClaimCheck` | only a guard whose entire condition is `n != 1` checks a claim; `n == 0 && n != 1`, `n != 1 \|\| ...` and `!(n == 1)` do not (S10) |
 | `adapter TestMultiRowClaimRules`, `TestMultiRowClaimWording`, `TestINShapes`, `TestPrimaryKeys` | a claim over `<key> IN (sqlc.slice(...))` is checked only by `n != int64(len(in.<List>))` with its own list; `len` nowhere else; the slice is the last parameter and, in a claim, on the `schema.sql` primary key; the exact D10/Q7/S11 English (D10, Q7, S11) |
 | `adapter TestRefusalsInHandle`, `TestSQLShapes`, `TestClaimRules`, `TestDomainUnderGrammar` | single constructs outside the grammar are refused with file:line:col |
@@ -147,7 +149,7 @@ Run everything: `./scripts/ci.sh`, then `./scripts/smoke-app.sh` (needs sqlc:
 | `adapter TestRulebookCoversGrammar` | RULEBOOK.md has exactly one section per grammar rule |
 | `runtime/httpx Test*` (incl. `TestClockRule*`, `TestSessionRule*`, `TestServerSet*`, `TestTx*`, `TestList*`) | every HTTP and transaction sentence the English quotes; a list input that is empty, too long, repeats an entry or has a null or wrongly typed entry is HTTP 400 |
 | `runtime/{assert,page,shape,store} Test*` | the other runtime primitives the English relies on |
-| `testdata/good/*/checks` (run by `smoke-app.sh`) | each fixture failure case fires and writes nothing; the claim's 599/600-second boundary; confirm_many against SQLite with sqlc's `sqlc.slice` code: all confirmed, one expired (nothing written), one not held by this session (all rolled back), empty or repeated list (400), concurrent calls on separate connections (sold once) |
+| `testdata/good/*/checks` (run by `smoke-app.sh`) | each fixture failure case fires and writes nothing; the claim's 599/600-second boundary; confirm_many against SQLite with sqlc's `sqlc.slice` code: all confirmed, one expired (nothing written), the expired-hold read `expires_at <= now` before its IN list at the boundary second, one not held by this session (all rolled back), empty or repeated list (400), concurrent calls on separate connections (sold once) |
 
 ## License
 

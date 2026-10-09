@@ -94,12 +94,13 @@ type walker struct {
 	locals     map[string]*local
 	fids       map[string]*FailureCase
 	pkgs       map[string]bool
-	writes     []int          // step numbers of writes so far
-	wrote      map[int]string // write step -> what it may have changed by now: wroteSome or wroteMaybe
-	readAt     map[string]int // W1: table -> step of the first read query (Q1, Q2, Q5) of it
-	sliceField string         // the list input (Go field name) passed to the current query's Q7 IN list
-	asserts    []string       // domain assertions met while rendering the current statement
-	panics     bool           // a domain function met in the current statement calls panic
+	writes     []int               // step numbers of writes so far
+	wrote      map[int]string      // write step -> what it may have changed by now: wroteSome or wroteMaybe
+	readAt     map[string]int      // W1: table -> step of the first read query (Q1, Q2, Q5) of it
+	sliceField string              // the list input (Go field name) passed to the current query's Q7 IN list
+	args       map[string]ast.Expr // the Go value passed for each SQL parameter of the current query
+	asserts    []string            // domain assertions met while rendering the current statement
+	panics     bool                // a domain function met in the current statement calls panic
 }
 
 // local is a name defined in Handle and how the English refers to it.
@@ -108,6 +109,7 @@ type local struct {
 	table   string // count, row
 	where   string // count: "`id` is ..."
 	has     string // count: "`id` equal to ..."
+	whose   bool   // count: compares with the current time, so a guard says "there is no <row> whose <where>"
 	phrase  string // row: "new invoice"
 	cols    []string
 	typ     string // let: domain type name of a record

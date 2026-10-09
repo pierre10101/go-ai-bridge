@@ -78,11 +78,15 @@ func (w *walker) countCond(e *ast.BinaryExpr) string {
 	if loc == nil || loc.kind != "count" || !ok || lit.Kind != token.INT {
 		return ""
 	}
+	none, some, cond := "count none", "count some", loc.has
+	if loc.whose { // the Q6 boundary words need "is": "`expires_at` is no later than the current time"
+		none, some, cond = "count none whose", "count some whose", loc.where
+	}
 	switch v := lit.Value; {
 	case (e.Op == token.EQL || e.Op == token.LEQ) && v == "0", e.Op == token.LSS && v == "1":
-		return fmt.Sprintf(t("count none"), singular(loc.table), loc.has)
+		return fmt.Sprintf(t(none), singular(loc.table), cond)
 	case (e.Op == token.NEQ || e.Op == token.GTR) && v == "0", e.Op == token.GEQ && v == "1":
-		return fmt.Sprintf(t("count some"), singular(loc.table), loc.has)
+		return fmt.Sprintf(t(some), singular(loc.table), cond)
 	}
 	return ""
 }

@@ -135,6 +135,36 @@ func TestF2_OneHoldExpired(t *testing.T) {
 	}
 }
 
+// The F2 read (CountStillHeld) counts a hold this session still has that
+// ended no later than now, on SQLite with sqlc's sqlc.slice code: at the
+// boundary second (expires_at = now) it counts, one second earlier it does
+// not. now comes before the IN list (Q7), so it is bound to its own value
+// and never to an entry of the list, whatever the list's length.
+func TestExpiredReadBoundary(t *testing.T) {
+	rows := append([]ticket{}, seed...)
+	rows[1].expiresAt = t0 // ticket 2 ends at t0; tickets 1 and 3 at t0+600; ticket 4 is s8's
+	_, conn := newAction(t, rows)
+	q := db.New(conn)
+	for _, tc := range []struct {
+		now  int64
+		ids  []int64
+		want int64
+	}{
+		{t0 - 1, []int64{1, 2, 3, 4}, 0},
+		{t0, []int64{1, 2, 3, 4}, 1},
+		{t0, []int64{2}, 1},
+		{t0, []int64{1, 3, 4, 5, 6, 99}, 0},
+		{t0 + 599, []int64{3, 2, 1}, 1},
+		{t0 + 600, []int64{3, 2, 1, 4}, 3},
+	} {
+		got, err := q.CountStillHeld(context.Background(), db.CountStillHeldParams{Session: "s7", Now: tc.now, Ids: tc.ids})
+		if err != nil || got != tc.want {
+			t.Fatalf("now %d ids %v: %d tickets (err %v), want %d", tc.now, tc.ids, got, err, tc.want)
+		}
+	}
+	unchanged(t, conn, rows)
+}
+
 // A ticket this session does not hold: someone else's, a free one, one
 // already sold, or no such ticket. Everything rolls back.
 func TestF3_NotHeldByThisSession(t *testing.T) {

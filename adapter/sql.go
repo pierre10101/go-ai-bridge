@@ -21,7 +21,7 @@ type SQLQuery struct {
 	Name, Cmd, File string
 	Shape           string // "count" (Q1), "row" (Q2), "insert" (Q3), "page" (Q5) or "claim" (Q6)
 	Table           string
-	Where           []sqlAssign // Q1, Q2, Q5: <col> = <value>, joined by AND
+	Where           []sqlAssign // Q1, Q2, Q5: <col> = <value> (Q1, Q2: or <col> <op> <the current time>), joined by AND
 	Values          []sqlAssign // Q3: column = value, in column order; Q6: SET column = value
 	Conds           []sqlCond   // Q6: WHERE conditions joined by AND (one may be an OR group)
 	Cols            []string    // Q2/Q5: selected columns; Q3: RETURNING columns
@@ -42,8 +42,21 @@ type SQLQuery struct {
 
 type sqlAssign struct {
 	Col string
+	Op  string // Q1, Q2 WHERE: "=" or, against the server-set current time only, "<>", "<", "<=", ">", ">="
 	Val sqlVal
+	pos token.Position
 }
+
+// clockCond reports whether a Q1/Q2 WHERE condition is more than <col> =
+// <value>: another comparison or an offset. Such a condition is allowed only
+// against the action's server-set clock input (T1), which the walker checks
+// where the query is called (readClockHint).
+func (a sqlAssign) clockCond() bool {
+	return a.Val.Kind == "param" && (a.Op != "=" || a.Val.Op != "")
+}
+
+// readClockHint is attached to every refusal of a comparison in a read.
+const readClockHint = "In a Q1 count or Q2 one-row read, a column is compared with <> < <= > >= or with an offset only against the action's server-set current time (T1): <col> <op> sqlc.arg(now) [+ or - <seconds>], the column first, with the action passing in.Now (an Input field tagged clock:\"now\") for it; every other condition is <col> = <value>"
 
 type sqlVal struct {
 	Kind  string // "param", "int", "string", "next", "slice" (Q7: sqlc.slice(<Param>))
@@ -496,43 +509,77 @@ func (p *sqlParser) from() {
 		return
 	}
 	for {
+		at := p.peek()
+		if at.kind == "word" && at.up == "SQLC" || at.kind == "param" {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "parameter on the left of a condition", Context: "query " + p.q.Name,
+				Hint: readClockHint + "; " + allowedSQL})
+			return
+		}
 		col, ok := p.ident("a column name in WHERE")
 		if !ok {
 			return
 		}
-		// Q5 keyset: <cursor> < <value> (DESC pages, newest first).
-		if p.accept("<") {
-			if p.q.Shape != "row" {
-				p.fail("= after " + col)
+		if p.is("IN") {
+			v, ok := p.inSlice(col)
+			if !ok {
 				return
 			}
-			if len(p.q.Where) == 0 {
-				p.failed = true
-				*p.errs = append(*p.errs, Refusal{Pos: p.toks[p.i-1].pos, Construct: "keyset page with no equality WHERE", Context: "query " + p.q.Name,
-					Hint: "Q5 needs at least one <col> = <value> before the cursor; " + allowedSQL})
+			p.q.Where = append(p.q.Where, sqlAssign{Col: col, Op: "=", Val: v, pos: at.pos})
+		} else {
+			t := p.peek()
+			op, isOp := claimOps[t.up]
+			if t.kind != "punct" || !isOp {
+				p.fail("= (or a comparison <> < <= > >= with the current time) after " + col)
 				return
 			}
+			p.i++
 			v, ok := p.value(col, false)
 			if !ok {
 				return
 			}
-			p.q.CursorCol, p.q.CursorVal = col, v
-			p.finishPage()
-			return
+			// Q5 keyset: <cursor> < <value> ORDER BY <cursor> DESC (newest first).
+			if op == "<" && p.q.Shape == "row" && p.is("ORDER") {
+				if len(p.q.Where) == 0 {
+					p.failed = true
+					*p.errs = append(*p.errs, Refusal{Pos: t.pos, Construct: "keyset page with no equality WHERE", Context: "query " + p.q.Name,
+						Hint: "Q5 needs at least one <col> = <value> before the cursor; " + allowedSQL})
+					return
+				}
+				p.q.CursorCol, p.q.CursorVal = col, v
+				p.finishPage()
+				p.noComparisonInPage()
+				return
+			}
+			if v, ok = p.offset(v); !ok {
+				return
+			}
+			c := sqlAssign{Col: col, Op: op, Val: v, pos: at.pos}
+			if (op != "=" || v.Op != "") && v.Kind != "param" {
+				p.failed = true
+				*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "comparison " + col + " " + op + " " + v.Lit + " in a read", Context: "query " + p.q.Name,
+					Hint: readClockHint})
+				return
+			}
+			p.q.Where = append(p.q.Where, c)
 		}
-		var v sqlVal
-		if p.is("IN") {
-			v, ok = p.inSlice(col)
-		} else if p.need("=", "= or < after "+col) {
-			v, ok = p.value(col, false)
-		} else {
-			return
-		}
-		if !ok {
-			return
-		}
-		p.q.Where = append(p.q.Where, sqlAssign{Col: col, Val: v})
 		if !p.accept("AND") {
+			return
+		}
+	}
+}
+
+// noComparisonInPage refuses a comparison with the current time in a Q5
+// keyset page: a page compares only its cursor.
+func (p *sqlParser) noComparisonInPage() {
+	if p.failed {
+		return
+	}
+	for _, c := range p.q.Where {
+		if c.clockCond() {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: c.pos, Construct: "comparison " + c.Col + " " + c.Op + " " + sqlParamText(c.Val) + " in a keyset page", Context: "query " + p.q.Name,
+				Hint: "A Q5 keyset page compares only its cursor (<cursor> < <value>); every other condition is <col> = <value>. A comparison with the current time belongs in a Q1 count, a Q2 one-row read or a Q6 claim"})
 			return
 		}
 	}
@@ -813,6 +860,12 @@ func (p *sqlParser) claimValue(col string) (sqlVal, bool) {
 	if !ok {
 		return v, false
 	}
+	return p.offset(v)
+}
+
+// offset reads "+ <n>" or "- <n>" after a parameter (Q6, and in Q1/Q2 next
+// to the current time): a parameter plus or minus a whole number.
+func (p *sqlParser) offset(v sqlVal) (sqlVal, bool) {
 	if (p.is("+") || p.is("-")) && v.Kind == "param" {
 		v.Op = p.peek().up
 		p.i++

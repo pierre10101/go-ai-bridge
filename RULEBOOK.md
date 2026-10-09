@@ -46,17 +46,17 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.1.3
+go get github.com/pierre10101/go-ai-bridge@v0.1.4
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.3
-bridge-en -version                      # bridge-en 0.1.3
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.4
+bridge-en -version                      # bridge-en 0.1.4
 ```
 
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.1.3
+require github.com/pierre10101/go-ai-bridge v0.1.4
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -67,9 +67,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.3   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.4   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.3
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.4
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -86,7 +86,7 @@ and the app runs that same runtime: both come from the one module version in
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.3; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.3), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.4; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.4), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
@@ -588,15 +588,64 @@ Refused: `:many` on a non-page select - `refused: query annotation :many on a no
 
 English: `Read: count the customers whose `id` is the request's `customer_id` (...)`; in a guard `customers == 0` -> ``no customer has `id` equal to the request's `customer_id` ``
 
-Refused: `... WHERE id = ? OR name = ?` - `refused: OR in WHERE is not in the allowed pattern list (query CustomerByIDOrName)`
+**Comparing with the current time.** A condition may also compare a column
+with the server-set current time (T1), with or without an offset, exactly as
+in a Q6 claim: `<col> <op> sqlc.arg(now) [+ or - <seconds>]`, where `<op>` is
+`<>`, `<`, `<=`, `>` or `>=` (or `=` with an offset). The column comes first,
+the parameter is never inside an OR, and a Q7 IN list still comes last. The
+action must pass **exactly its clock input** for that parameter
+(`Now: in.Now`, the Input field tagged `clock:"now"`), because the English
+says "the current time": a request field, a let, a literal or any other value
+is refused. It is said in the Q6 boundary words (see the
+[Q6 table](#q6)), and a guard on such a count says "there is (no | at least
+one) <row> whose ...", so the words stay exactly those of Q6.
+
+```sql
+-- name: CountStillHeld :one
+SELECT COUNT(*) FROM tickets WHERE held_by = sqlc.arg(session) AND expires_at <= sqlc.arg(now) AND id IN (sqlc.slice(ids));
+```
+```go
+held, err := a.q.CountStillHeld(ctx, db.CountStillHeldParams{Session: in.Session, Now: in.Now, Ids: in.TicketIDs})
+...
+if held != 0 {
+	return Output{}, F2
+}
+```
+English (`adapter/testdata/good/confirm_many/confirm_many.en`):
+```
+3. Read: count the tickets whose `held_by` is the session from the cookie and `expires_at` is no later than the current time and `id` is one of the request's `ticket_ids` (query `CountStillHeld` in queries/tickets_after.sql). If the query fails, stop with HTTP 500 Internal Server Error.
+   Any change made in step 2 is rolled back.
+4. If there is at least one ticket whose `held_by` is the session from the cookie and `expires_at` is no later than the current time and `id` is one of the request's `ticket_ids`, stop with F2: HTTP 410 Gone "a hold has expired".
+```
+A ticket whose `expires_at` is exactly the current time is counted (the
+checks prove it on SQLite at the boundary second, and one second earlier it
+is not). A plain `<col> = sqlc.arg(now)` stays a Q4 equality:
+`` `expires_at` is the current time ``.
+
+Refused:
+- `... WHERE id = ? OR name = ?` - `refused: OR in WHERE is not in the allowed pattern list (query CustomerByIDOrName)`
+- `expires_at <= sqlc.arg(cutoff)` with `Cutoff: in.Cutoff` (`adapter/testdata/bad/read_clock_source`) - `refused: comparison expires_at <= sqlc.arg(cutoff) in query CountHeldUntil, whose value in.Cutoff is not the server-set current time is not in the allowed pattern list (Q1 count). In a Q1 count or Q2 one-row read, a column is compared with <> < <= > >= or with an offset only against the action's server-set current time (T1): <col> <op> sqlc.arg(now) [+ or - <seconds>], the column first, with the action passing in.Now (an Input field tagged clock:"now") for it; every other condition is <col> = <value>`
+- `expires_at <= 1800000000` - `refused: comparison expires_at <= 1800000000 in a read is not in the allowed pattern list (query CountEndedBefore). In a Q1 count or Q2 one-row read, ...`
+- `sqlc.arg(now) >= expires_at` (`adapter/testdata/bad/read_clock_position`) - `refused: parameter on the left of a condition is not in the allowed pattern list (query CountClockLeft). In a Q1 count or Q2 one-row read, ...`
+- `id IN (sqlc.slice(ids)) AND expires_at <= sqlc.arg(now)` - `refused: parameter now after IN (sqlc.slice(ids)) is not in the allowed pattern list (query CountAfterList). sqlc numbers the parameters as if the slice were one value, ...` (Q7)
 
 ### Q2
 
 **one row** - `SELECT <col>, ... FROM <table> WHERE <col> = <value> [AND ...]`.
+A condition may compare a column with the server-set current time exactly as
+in Q1 (`<col> <op> sqlc.arg(now) [+ or - <seconds>]`, bound to `in.Now`
+itself), said in the Q6 boundary words.
 
-English: `Read: find a seat whose `id` is ... ; if several match, the first row returned is used. Call it the found seat.` / `If no seat matches or the query fails, stop with HTTP 500 Internal Server Error.`
+```sql
+-- name: SeatHolder :one
+SELECT held_by, held_at FROM seats WHERE id = sqlc.arg(id) AND held_at <= sqlc.arg(now) - 600;
+```
+```go
+seat, err := a.q.SeatHolder(ctx, db.SeatHolderParams{ID: in.SeatID, Now: in.Now})
+```
+English: `Read: find a seat whose `id` is the request's `seat_id` and `held_at` is 10 minutes or more before the current time (query `SeatHolder` in queries/seat_after.sql); if several match, the first row returned is used. Call it the found seat.` / `If no seat matches or the query fails, stop with HTTP 500 Internal Server Error.` (`TestClockComparisonInReads`)
 
-Refused: `SELECT * ...` - `refused: SELECT * is not in the allowed pattern list`; `... JOIN ...` - `refused: JOIN is not in the allowed pattern list`
+Refused: `SELECT * ...` - `refused: SELECT * is not in the allowed pattern list`; `... JOIN ...` - `refused: JOIN is not in the allowed pattern list`; `expires_at > sqlc.arg(now) - 600` with `Now: in.Cutoff` (`adapter/testdata/bad/read_clock_source`) - `refused: comparison expires_at > sqlc.arg(now) - 600 in query FindLiveHold, whose value in.Cutoff is not the server-set current time is not in the allowed pattern list (Q2 one row). ...`
 
 ### Q3
 
@@ -621,7 +670,7 @@ Refused: `WHERE id = (SELECT 1)` - `refused: subquery is not in the allowed patt
 
 English: `5. Read: list the invoices whose `customer_id` is the request's `customer_id` and whose `seq` is less than the request's `after`, highest `seq` first, at most the request's `limit` of them (...). Call them the listed invoices; there may be none.`
 
-Refused: `... LIMIT ? OFFSET ?` - `refused: OFFSET ...`; a write query in a GET - `refused: write query AddInvoice in a GET action`
+Refused: `... LIMIT ? OFFSET ?` - `refused: OFFSET ...`; a write query in a GET - `refused: write query AddInvoice in a GET action`; a comparison with the current time in a page (`adapter/testdata/bad/read_clock_position`) - `refused: comparison expires_at <= sqlc.arg(now) in a keyset page is not in the allowed pattern list (query PageEnded). A Q5 keyset page compares only its cursor (<cursor> < <value>); every other condition is <col> = <value>. A comparison with the current time belongs in a Q1 count, a Q2 one-row read or a Q6 claim`
 
 ### Q6
 
@@ -651,10 +700,14 @@ With no offset the same words compare with the current time itself: an
 `expires_at` equal to the current time is "no later than" and "no earlier
 than" it, and neither "earlier than" nor "later than" it.
 `TestClockComparisonWording`, `TestClockComparisonTable` and
-`TestClockComparisonWithoutOffset` pin these lines;
+`TestClockComparisonWithoutOffset` pin these lines, and
+`TestClockComparisonInReads` pins the same words in a Q1 count and a Q2
+one-row read (where the value must be the clock input `in.Now` itself);
 the claim checks prove the `<=` boundary against SQLite (a hold taken 599
 seconds earlier blocks the seat, one taken exactly 600 seconds earlier does
-not).
+not), and the confirm_many checks prove the read's `expires_at <=
+sqlc.arg(now)` at the boundary second (a hold ending exactly now is counted,
+one second earlier it is not).
 
 | SQL | English |
 |---|---|
@@ -705,7 +758,12 @@ UPDATE tickets
 SET sold_to = sqlc.arg(session), held_by = ''
 WHERE held_by = sqlc.arg(session) AND expires_at > sqlc.arg(now) AND id IN (sqlc.slice(ids));
 ```
-English: ``2. Claim: in table `tickets`, set `sold_to` = the session from the cookie and `held_by` = the text "" on each ticket whose `held_by` is the session from the cookie and `expires_at` is later than the current time and `id` is one of the request's `ticket_ids` at that moment (...)``; in a read, ``count the tickets whose `held_by` is the session from the cookie and `id` is one of the request's `ticket_ids` ``; in a guard, ``at least one ticket has `held_by` equal to the session from the cookie and `id` equal to one of the request's `ticket_ids` ``.
+English: ``2. Claim: in table `tickets`, set `sold_to` = the session from the cookie and `held_by` = the text "" on each ticket whose `held_by` is the session from the cookie and `expires_at` is later than the current time and `id` is one of the request's `ticket_ids` at that moment (...)``; in a read, ``count the tickets whose `sold_to` is the session from the cookie and `id` is one of the request's `ticket_ids` ``; in a guard on a count, ``at least one ticket has `held_by` equal to the session from the cookie and `id` equal to one of the request's `ticket_ids` `` (or, when the count also compares with the current time, Q1, ``there is at least one ticket whose `held_by` is the session from the cookie and `expires_at` is no later than the current time and `id` is one of the request's `ticket_ids` ``).
+
+With a comparison with the current time in the same read (Q1), the slice still
+comes last: `held_by = sqlc.arg(session) AND expires_at <= sqlc.arg(now) AND id IN (sqlc.slice(ids))`
+numbers `session` ?1 and `now` ?2 before the list, which the confirm_many
+checks run on SQLite (`TestExpiredReadBoundary`).
 
 Refused (`adapter/testdata/bad/list_shapes`):
 - `WHERE id IN (sqlc.slice(ids)) AND held_by = sqlc.arg(session) ...` - `refused: parameter session after IN (sqlc.slice(ids)) is not in the allowed pattern list (query ConfirmSliceFirst). sqlc numbers the parameters as if the slice were one value, so with SQLite a parameter after it is bound to one of the list's entries instead of its own value; put id IN (sqlc.slice(ids)) last in the statement`
@@ -713,6 +771,7 @@ Refused (`adapter/testdata/bad/list_shapes`):
 - `(expires_at = 0 OR id IN (sqlc.slice(ids)))` - `refused: IN inside an OR group is not in the allowed pattern list (query ConfirmInGroup). ...`
 - `WHERE id IN (1, 2)` - `refused: SQL "1" is not in the allowed pattern list (query CountListed). Expected (sqlc.slice(<name>)) after IN ...`
 - `a.q.CountTickets(ctx, in.Scalar)` - `refused: value in.Scalar for IN (sqlc.slice(ids)) that is not a list input is not in the allowed pattern list (Q7 IN list). ...`
+- `... id IN (sqlc.slice(ids)) AND expires_at <= sqlc.arg(now)` in a read (`adapter/testdata/bad/read_clock_position`) - `refused: parameter now after IN (sqlc.slice(ids)) is not in the allowed pattern list (query CountAfterList). ...`
 
 ---
 
@@ -742,7 +801,7 @@ English:
 The action also takes this value, which the caller does not send:
 - `now`: set by the server to the current time when the request arrives, in whole seconds since 1970-01-01 UTC; the caller does not send it, and a request that does is answered with HTTP 400 below.
 ```
-and in steps: `` `held_at` is 10 minutes or more before the current time `` (see Q6 for every operator).
+and in steps: `` `held_at` is 10 minutes or more before the current time `` (see Q6 for every operator; the same words in a Q1 or Q2 read, whose parameter must be bound to `in.Now` itself).
 
 Refused:
 - `import "time"` - `refused: import "time" is not in the allowed pattern list (T1 time is passed in). Logic never reads the clock. ...`
@@ -941,10 +1000,12 @@ a hold, approving a request, consuming a one-time token. The seat hold in
    stop rolls back every change, so one row that is not in the expected state
    (expired, someone else's, already done, missing) leaves all of them as
    they were. `adapter/testdata/good/confirm_many` confirms several held
-   tickets in one call; its checks run against SQLite: all confirmed, one
-   expired (nothing written), one not held by this session (everything
-   rolled back), an empty or repeated list (400), and concurrent calls (the
-   basket is sold once).
+   tickets in one call, then explains a stop with a read that compares with
+   the current time (Q1: "`expires_at` is no later than the current time");
+   its checks run against SQLite: all confirmed, one expired (nothing
+   written, also at the boundary second), one not held by this session
+   (everything rolled back), an empty or repeated list (400), and concurrent
+   calls (the basket is sold once).
 
 ## Hard limits
 

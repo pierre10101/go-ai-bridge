@@ -55,8 +55,12 @@ var exprTemplates = map[string]string{
 	"count none":  "no %s has %s",
 	"count some":  "at least one %s has %s",
 	"count value": "the number of %s whose %s",
-	"where is":    "`%s` is %s",
-	"where has":   "`%s` equal to %s",
+	// A count that compares with the current time (Q1, T1) keeps the Q6
+	// boundary words ("is no later than"), so its guard says "whose".
+	"count none whose": "there is no %s whose %s",
+	"count some whose": "there is at least one %s whose %s",
+	"where is":         "`%s` is %s",
+	"where has":        "`%s` equal to %s",
 	// Q7 IN lists in reads and claims.
 	"where is in":  "`%s` is one of %s",
 	"where has in": "`%s` equal to one of %s",

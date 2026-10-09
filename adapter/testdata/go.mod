@@ -7,6 +7,6 @@ module example.com/fixtures
 
 go 1.24.0
 
-require github.com/pierre10101/go-ai-bridge v0.1.3
+require github.com/pierre10101/go-ai-bridge v0.1.4
 
 replace github.com/pierre10101/go-ai-bridge => ../..

@@ -656,12 +656,35 @@ func (w *walker) query(s *ast.AssignStmt) {
 	if vals == nil {
 		return
 	}
+	clock := false // Q1/Q2: a comparison with the current time (T1)
+	for _, c := range q.Where {
+		if !c.clockCond() {
+			continue
+		}
+		clock = true
+		if arg := w.args[c.Val.Param]; arg != nil && !w.isClockInput(arg) {
+			ctx := "Q1 count"
+			if q.Shape == "row" {
+				ctx = "Q2 one row"
+			}
+			w.refuse(arg, "comparison "+c.Col+" "+c.Op+" "+sqlParamText(c.Val)+" in query "+q.Name+", whose value "+types.ExprString(arg)+" is not the server-set current time",
+				ctx, readClockHint)
+		}
+	}
 	where := func(tmpl string) string {
 		parts := make([]string, len(q.Where))
 		for i, c := range q.Where {
 			key := tmpl
-			if c.Val.Kind == "slice" {
+			switch {
+			case c.Val.Kind == "slice":
 				key += " in" // Q7: "`id` is one of the request's `seat_ids`"
+			case c.clockCond() && c.Val.Op != "":
+				n, _ := strconv.Atoi(c.Val.Off)
+				parts[i] = clockComparison(c.Col, c.Op, c.Val.Op, n) // the Q6 boundary words
+				continue
+			case c.clockCond():
+				parts[i] = clockNow("`"+c.Col+"`", c.Op) // the Q6 boundary words
+				continue
 			}
 			parts[i] = fmt.Sprintf(t(key), c.Col, w.sqlValue(c.Val, vals, c.Col, q.Table))
 		}
@@ -671,7 +694,7 @@ func (w *walker) query(s *ast.AssignStmt) {
 	var text string
 	switch q.Shape {
 	case "count":
-		*loc = local{kind: "count", table: q.Table, where: where("where is"), has: where("where has")}
+		*loc = local{kind: "count", table: q.Table, where: where("where is"), has: where("where has"), whose: clock}
 		text = fmt.Sprintf(st("count"), plural(q.Table), loc.where, q.Name, q.File) + " " + fmt.Sprintf(st("query fails"), w.internal())
 	case "row":
 		*loc = local{kind: "row", table: q.Table, phrase: fmt.Sprintf(t("found row"), singular(q.Table)), cols: q.Cols}
@@ -757,6 +780,7 @@ func (w *walker) query(s *ast.AssignStmt) {
 func (w *walker) paramValues(call *ast.CallExpr, q *SQLQuery) map[string]string {
 	args := call.Args[1:]
 	vals := map[string]string{}
+	w.args = map[string]ast.Expr{}
 	var lit *ast.CompositeLit
 	if len(args) == 1 {
 		switch a := args[0].(type) {
@@ -786,7 +810,7 @@ func (w *walker) paramValues(call *ast.CallExpr, q *SQLQuery) map[string]string 
 				w.refuse(kv, "field "+key+" of "+typ+", which matches no parameter of query "+q.Name, "S3 query", "")
 				return nil
 			}
-			vals[p] = w.paramValue(q, p, kv.Value)
+			vals[p], w.args[p] = w.paramValue(q, p, kv.Value), kv.Value
 		}
 		for _, p := range q.Params {
 			if _, ok := vals[p]; !ok {
@@ -801,7 +825,7 @@ func (w *walker) paramValues(call *ast.CallExpr, q *SQLQuery) map[string]string 
 		return nil
 	}
 	for i, a := range args {
-		vals[q.Params[i]] = w.paramValue(q, q.Params[i], a)
+		vals[q.Params[i]], w.args[q.Params[i]] = w.paramValue(q, q.Params[i], a), a
 	}
 	return vals
 }
@@ -821,6 +845,36 @@ func (w *walker) paramValue(q *SQLQuery, p string, e ast.Expr) string {
 	}
 	w.sliceField = name
 	return fmt.Sprintf(t("request field"), json)
+}
+
+// isClockInput reports whether e is exactly in.<Field> for the Input field
+// tagged clock:"now" (T1): the only value a Q1/Q2 comparison with the
+// current time may be bound to, so "the current time" in the English is true.
+func (w *walker) isClockInput(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	root, ok := sel.X.(*ast.Ident)
+	if !ok || w.locals[root.Name] == nil || w.locals[root.Name].kind != "request" {
+		return false
+	}
+	for _, f := range w.f.Input {
+		if f.Name == sel.Sel.Name && f.ServerSet == "clock" {
+			return true
+		}
+	}
+	return false
+}
+
+// sqlParamText writes a parameter value back as SQL for a refusal:
+// sqlc.arg(now) - 600.
+func sqlParamText(v sqlVal) string {
+	s := "sqlc.arg(" + v.Param + ")"
+	if v.Op != "" {
+		s += " " + v.Op + " " + v.Off
+	}
+	return s
 }
 
 // goName is the Go field name sqlc gives parameter p (seat_ids -> SeatIds).
