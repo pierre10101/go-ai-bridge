@@ -67,24 +67,14 @@ jobs:
           set -e
 
           if [ -z "${diff_out}" ]; then
-            body="${MARKER}
-
-No \`.en\` file changes in this PR (compared to \`${SHORT}\`)."
+            body=$(printf '%s\n\nNo `.en` file changes in this PR (compared to `%s`).' "${MARKER}" "${SHORT}")
           else
             trunc_note=""
             if [ "${#diff_out}" -gt "${MAX_DIFF_CHARS}" ]; then
               diff_out="${diff_out:0:${MAX_DIFF_CHARS}}"
-              trunc_note="
-
-> **Note:** Diff truncated for the GitHub comment size limit (~65k). See the full \`.en\` changes under **Files changed**."
+              trunc_note=$(printf '\n\n> **Note:** Diff truncated for the GitHub comment size limit (~65k). See the full `.en` changes under **Files changed**.')
             fi
-            body="${MARKER}
-
-Golden English (\`adapter/testdata/good/**/*.en\`) changes vs base \`${SHORT}\`:
-
-\`\`\`diff
-${diff_out}
-\`\`\`${trunc_note}"
+            body=$(printf '%s\n\nGolden English (`adapter/testdata/good/**/*.en`) changes vs base `%s`:\n\n```diff\n%s\n```%s' "${MARKER}" "${SHORT}" "${diff_out}" "${trunc_note}")
           fi
 
           # Idempotent: update existing bot comment with marker, else create
