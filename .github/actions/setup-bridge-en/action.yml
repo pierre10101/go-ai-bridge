@@ -1,0 +1,38 @@
+name: Setup bridge-en
+description: >-
+  Install a pinned bridge-en (a deterministic Go -> English adapter) and
+  put it on PATH. The pin is the app's go.mod: by default the installed
+  binary is the version of github.com/pierre10101/bridge-en the app requires,
+  the same version as the runtime it imports.
+inputs:
+  version:
+    description: "bridge-en version, e.g. 0.1.0 or v0.1.0. Default: the version of github.com/pierre10101/bridge-en required by go.mod in working-directory (go list -m)."
+    required: false
+    default: ""
+  working-directory:
+    description: "The app's module root (the directory with go.mod)."
+    required: false
+    default: "."
+  method:
+    description: "go-install (default; needs actions/setup-go first) or release (downloads the released binary and checks its SHA256)."
+    required: false
+    default: go-install
+  sha256:
+    description: "release method only: the expected SHA256 of the archive, pinned in the app. Default: checked against the release's SHA256SUMS."
+    required: false
+    default: ""
+outputs:
+  version:
+    description: The installed version.
+    value: ${{ steps.install.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BRIDGE_EN_VERSION: ${{ inputs.version }}
+        BRIDGE_EN_METHOD: ${{ inputs.method }}
+        BRIDGE_EN_SHA256: ${{ inputs.sha256 }}
+      run: '"$GITHUB_ACTION_PATH/install.sh"'

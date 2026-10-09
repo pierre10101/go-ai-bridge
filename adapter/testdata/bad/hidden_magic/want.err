@@ -1,0 +1,6 @@
+testdata/bad/hidden_magic/action.go:7:2: refused: import "fmt" is not in the allowed pattern list (D2 imports). Allowed: context, net/http, github.com/pierre10101/go-ai-bridge/runtime/{assert,failure,page}, <module>/internal/domain, <module>/features/hidden_magic/db
+testdata/bad/hidden_magic/action.go:17:14: refused: field type []int64 is not in the allowed pattern list (D4 input). List fields are only on Output (D5); Input stays scalar
+testdata/bad/hidden_magic/action.go:34:11: refused: arithmetic operator / is not in the allowed pattern list (expression). Do arithmetic in internal/domain and call it (E5)
+testdata/bad/hidden_magic/action.go:35:11: refused: function literal (closure) is not in the allowed pattern list (expression). Name the rule in internal/domain and call it (E5)
+testdata/bad/hidden_magic/action.go:36:23: refused: call to label is not in the allowed pattern list (expression). E5: only domain.<Func>(...) and page.IsPageLimit(...) calls; queries go through S3
+testdata/bad/hidden_magic/action.go:41:1: refused: function vat is not in the allowed pattern list (top level of action.go). Only New (D8) and Handle (D9); put pure helpers in internal/domain

@@ -1,0 +1,1 @@
+testdata/bad/retry_loop/action.go:47:2: refused: for loop is not in the allowed pattern list (Handle body). Allowed here: S1 precondition, S2 guard, S3 query, S4 error return, S5 let, S6 postcondition, S7 success return, S8 map each, S9 next cursor

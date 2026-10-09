@@ -1,0 +1,901 @@
+package adapter
+
+import (
+	"bufio"
+	"fmt"
+	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// SQL is read with a small tokenizer and a recursive-descent parser that
+// accepts only the Q-patterns in Grammar. There is no "best effort": any
+// token outside a recognised shape is refused with file:line:col, exactly
+// like Go constructs in action.go.
+
+// SQLQuery is one sqlc-annotated query in queries/*.sql, parsed into a shape.
+type SQLQuery struct {
+	Name, Cmd, File string
+	Shape           string // "count" (Q1), "row" (Q2), "insert" (Q3), "page" (Q5) or "claim" (Q6)
+	Table           string
+	Where           []sqlAssign // Q1, Q2, Q5: <col> = <value>, joined by AND
+	Values          []sqlAssign // Q3: column = value, in column order; Q6: SET column = value
+	Conds           []sqlCond   // Q6: WHERE conditions joined by AND (one may be an OR group)
+	Cols            []string    // Q2/Q5: selected columns; Q3: RETURNING columns
+	Params          []string    // distinct parameter names, in order of appearance
+	// Q5 keyset page:
+	CursorCol     string // ORDER BY column; WHERE CursorCol < CursorVal
+	CursorVal     sqlVal
+	Limit         sqlVal // LIMIT value (param or int literal 1..page.MaxPageSize)
+	LimitN        int    // LIMIT literal, checked against page.MaxPageSize when rendered
+	Reads, Writes []string
+	bad           bool // refused; already reported
+	pos           token.Position
+	toks          []sqlTok
+}
+
+type sqlAssign struct {
+	Col string
+	Val sqlVal
+}
+
+type sqlVal struct {
+	Kind  string // "param", "int", "string", "next"
+	Param string // Kind param: sqlc parameter name
+	Lit   string // Kind int/string: literal text
+	Op    string // Q6 only: "+" or "-" with Off (a parameter plus or minus a whole number)
+	Off   string
+}
+
+// sqlCond is one Q6 WHERE condition: <col> <op> <value>, or a parenthesised
+// OR group of such conditions (Any).
+type sqlCond struct {
+	Col, Op string
+	Val     sqlVal
+	Any     []sqlCond
+}
+
+type sqlTok struct {
+	kind string // "word", "qword" (quoted identifier), "num", "str", "param", "punct", "eof"
+	text string
+	up   string
+	pos  token.Position
+}
+
+var nameRe = regexp.MustCompile(`^--\s*name:\s*(\w+)\s+(:\w+)`)
+
+// allowedSQL is the hint attached to every SQL refusal.
+const allowedSQL = "allowed SQL shapes: Q1 count, Q2 one row, Q3 insert, Q5 keyset page, Q6 claim update (see bridge-en -grammar)"
+
+// LoadQueries reads every queries/*.sql file in dir, keyed by query name.
+// Unrecognised SQL is returned as Refusals; refused queries are still in the
+// map (marked bad) so callers do not report them twice.
+func LoadQueries(dir string) (map[string]*SQLQuery, Refusals, error) {
+	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
+	if err != nil {
+		return nil, nil, err
+	}
+	sort.Strings(files)
+	out := map[string]*SQLQuery{}
+	var errs Refusals
+	for _, path := range files {
+		if err := parseSQLFile(path, out, &errs); err != nil {
+			return nil, nil, err
+		}
+	}
+	return out, errs, nil
+}
+
+func parseSQLFile(path string, out map[string]*SQLQuery, errs *Refusals) error {
+	fh, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	var cur *SQLQuery
+	flush := func() {
+		if cur == nil {
+			return
+		}
+		if !cur.bad {
+			p := &sqlParser{q: cur, toks: cur.toks, errs: errs}
+			p.statement()
+			cur.bad = p.failed
+			if !cur.bad {
+				switch {
+				case cur.Cmd == ":many" && cur.Shape != "page":
+					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation :many on a non-page shape", Context: "Q0 query annotation",
+						Hint: ":many is only for Q5 keyset pages (WHERE … AND <cursor> < ? ORDER BY <cursor> DESC LIMIT n)"})
+					cur.bad = true
+				case cur.Cmd == ":one" && cur.Shape == "page":
+					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation :one on a keyset page", Context: "Q0 query annotation",
+						Hint: "Q5 keyset pages use :many"})
+					cur.bad = true
+				case cur.Cmd != ":execrows" && cur.Shape == "claim":
+					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation " + cur.Cmd + " on a claim update", Context: "Q0 query annotation",
+						Hint: "A Q6 claim answers with the number of rows it changed: annotate it :execrows and check that number is exactly 1 (S10)"})
+					cur.bad = true
+				case cur.Cmd == ":execrows" && cur.Shape != "claim":
+					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation :execrows on a non-claim shape", Context: "Q0 query annotation",
+						Hint: ":execrows is only for Q6 claim updates"})
+					cur.bad = true
+				}
+			}
+		}
+		cur.toks = nil
+		out[cur.Name] = cur
+	}
+	sc := bufio.NewScanner(fh)
+	lineNo := 0
+	for sc.Scan() {
+		lineNo++
+		raw := sc.Text()
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "--") {
+			m := nameRe.FindStringSubmatch(line)
+			if m == nil {
+				continue // plain comment
+			}
+			flush()
+			pos := token.Position{Filename: path, Line: lineNo, Column: strings.Index(raw, "--") + 1}
+			cur = &SQLQuery{Name: m[1], Cmd: m[2], File: "queries/" + filepath.Base(path), pos: pos}
+			if out[cur.Name] != nil {
+				*errs = append(*errs, Refusal{Pos: pos, Construct: "second query named " + cur.Name, Context: "Q0 query annotation", Hint: "Query names are unique"})
+				cur.bad = true
+			}
+			if cur.Cmd != ":one" && cur.Cmd != ":many" && cur.Cmd != ":execrows" {
+				*errs = append(*errs, Refusal{Pos: pos, Construct: "query annotation " + cur.Cmd, Context: "Q0 query annotation",
+					Hint: "Only :one (Q1-Q3), :many (Q5 keyset page) or :execrows (Q6 claim update) are in the grammar"})
+				cur.bad = true
+			}
+			continue
+		}
+		toks := tokenizeSQL(raw, path, lineNo)
+		if len(toks) == 0 {
+			continue
+		}
+		if cur == nil {
+			*errs = append(*errs, Refusal{Pos: toks[0].pos, Construct: "SQL before any -- name: annotation", Context: "Q0 query annotation",
+				Hint: "Start every query with -- name: <Query> :one, :many or :execrows"})
+			return nil
+		}
+		cur.toks = append(cur.toks, toks...)
+	}
+	flush()
+	return sc.Err()
+}
+
+func isWordStart(c byte) bool { return c == '_' || (c|0x20) >= 'a' && (c|0x20) <= 'z' }
+func isDigit(c byte) bool     { return c >= '0' && c <= '9' }
+
+// tokenizeSQL splits one line. Everything after -- is a comment.
+func tokenizeSQL(line, file string, lineNo int) []sqlTok {
+	var out []sqlTok
+	i := 0
+	for i < len(line) {
+		c := line[i]
+		start := i
+		pos := token.Position{Filename: file, Line: lineNo, Column: i + 1}
+		switch {
+		case c == ' ' || c == '\t' || c == '\r':
+			i++
+			continue
+		case c == '-' && i+1 < len(line) && line[i+1] == '-':
+			return out
+		case isWordStart(c):
+			for i < len(line) && (isWordStart(line[i]) || isDigit(line[i])) {
+				i++
+			}
+			w := line[start:i]
+			out = append(out, sqlTok{kind: "word", text: w, up: strings.ToUpper(w), pos: pos})
+			continue
+		case isDigit(c):
+			for i < len(line) && isDigit(line[i]) {
+				i++
+			}
+			out = append(out, sqlTok{kind: "num", text: line[start:i], up: line[start:i], pos: pos})
+			continue
+		case c == '\'':
+			i++
+			for i < len(line) {
+				if line[i] == '\'' {
+					if i+1 < len(line) && line[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					break
+				}
+				i++
+			}
+			if i < len(line) {
+				i++
+			}
+			out = append(out, sqlTok{kind: "str", text: line[start:i], up: line[start:i], pos: pos})
+			continue
+		case c == '"' || c == '`':
+			i++
+			for i < len(line) && line[i] != c {
+				i++
+			}
+			name := line[start+1 : i]
+			if i < len(line) {
+				i++
+			}
+			out = append(out, sqlTok{kind: "qword", text: name, up: strings.ToUpper(name), pos: pos})
+			continue
+		case c == '?':
+			i++
+			for i < len(line) && isDigit(line[i]) {
+				i++
+			}
+			out = append(out, sqlTok{kind: "param", text: line[start:i], up: line[start:i], pos: pos})
+			continue
+		}
+		i++
+		if i < len(line) {
+			switch two := line[start : i+1]; two {
+			case "<=", ">=", "<>", "!=", "==", "||":
+				i++
+			}
+		}
+		out = append(out, sqlTok{kind: "punct", text: line[start:i], up: line[start:i], pos: pos})
+	}
+	return out
+}
+
+// reserved words are never table or column names.
+var reserved = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`SELECT FROM WHERE AND OR NOT INSERT INTO VALUES RETURNING UPDATE DELETE SET
+		JOIN LEFT RIGHT INNER OUTER CROSS NATURAL FULL ON USING UNION INTERSECT EXCEPT GROUP ORDER BY HAVING LIMIT
+		OFFSET DISTINCT ALL AS WITH REPLACE IN IS NULL LIKE GLOB BETWEEN EXISTS CASE WHEN THEN ELSE END CONFLICT
+		DO NOTHING ABORT IGNORE FAIL ROLLBACK DEFAULT COUNT MAX MIN COALESCE`) {
+		reserved[w] = true
+	}
+}
+
+// sqlConstructs names well-known SQL that is outside the grammar.
+var sqlConstructs = map[string]string{
+	"JOIN": "JOIN", "LEFT": "JOIN", "RIGHT": "JOIN", "INNER": "JOIN", "OUTER": "JOIN", "CROSS": "JOIN",
+	"NATURAL": "JOIN", "FULL": "JOIN", "UNION": "UNION", "INTERSECT": "INTERSECT", "EXCEPT": "EXCEPT",
+	"GROUP": "GROUP BY", "ORDER": "ORDER BY", "HAVING": "HAVING", "LIMIT": "LIMIT", "OFFSET": "OFFSET",
+	"DISTINCT": "SELECT DISTINCT", "WITH": "WITH (common table expression)", "REPLACE": "REPLACE statement",
+	"UPDATE": "UPDATE statement", "DELETE": "DELETE statement", "AS": "alias (AS)", "NULL": "NULL",
+	"IN": "IN", "LIKE": "LIKE", "GLOB": "GLOB", "BETWEEN": "BETWEEN", "EXISTS": "EXISTS", "CASE": "CASE",
+	"IS": "IS", "NOT": "NOT", "DEFAULT": "DEFAULT VALUES",
+}
+
+type sqlParser struct {
+	q      *SQLQuery
+	toks   []sqlTok
+	i      int
+	errs   *Refusals
+	failed bool
+}
+
+func (p *sqlParser) peekAt(k int) sqlTok {
+	if p.i+k < len(p.toks) {
+		return p.toks[p.i+k]
+	}
+	pos := p.q.pos
+	if n := len(p.toks); n > 0 {
+		pos = p.toks[n-1].pos
+		pos.Column += len(p.toks[n-1].text)
+	}
+	return sqlTok{kind: "eof", text: "end of query", pos: pos}
+}
+
+func (p *sqlParser) peek() sqlTok { return p.peekAt(0) }
+
+// is reports whether the next token is the keyword or punctuation s.
+func (p *sqlParser) is(s string) bool {
+	t := p.peek()
+	return (t.kind == "word" || t.kind == "punct" || t.kind == "num") && t.up == s
+}
+
+func (p *sqlParser) accept(s string) bool {
+	if p.failed || !p.is(s) {
+		return false
+	}
+	p.i++
+	return true
+}
+
+func (p *sqlParser) need(s, expected string) bool {
+	if p.accept(s) {
+		return true
+	}
+	p.fail(expected)
+	return false
+}
+
+func (p *sqlParser) fail(expected string) {
+	if p.failed {
+		return
+	}
+	p.failed = true
+	t := p.peek()
+	*p.errs = append(*p.errs, Refusal{Pos: t.pos, Construct: p.construct(t), Context: "query " + p.q.Name,
+		Hint: "Expected " + expected + "; " + allowedSQL})
+}
+
+// construct names the refused SQL so the reader recognises it.
+func (p *sqlParser) construct(t sqlTok) string {
+	prev, next := "", p.peekAt(1)
+	if p.i > 0 {
+		prev = p.toks[p.i-1].up
+	}
+	switch {
+	case t.kind == "eof" || t.up == ";":
+		return "end of statement"
+	case t.up == "RETURNING" && p.q.Shape == "claim":
+		return "RETURNING on an UPDATE"
+	case t.up == "OR" && prev == "INSERT":
+		return "INSERT OR " + next.up
+	case t.up == "OR":
+		return "OR in WHERE"
+	case t.up == "ON" && next.up == "CONFLICT":
+		return "ON CONFLICT (upsert)"
+	case t.up == "*" && prev == "SELECT":
+		return "SELECT *"
+	case t.up == "(" && next.up == "SELECT":
+		return "subquery"
+	case t.up == "," && prev != "" && p.inFrom():
+		return "FROM with several tables"
+	case p.i > 0 && prev == ";":
+		return "second statement in one query"
+	case t.kind == "word":
+		if name, ok := sqlConstructs[t.up]; ok {
+			return name
+		}
+		if p.i == 0 {
+			return t.up + " statement"
+		}
+		return fmt.Sprintf("SQL %q", t.text)
+	}
+	return fmt.Sprintf("SQL %q", t.text)
+}
+
+func (p *sqlParser) inFrom() bool { return p.i >= 2 && p.toks[p.i-2].up == "FROM" }
+
+// ident reads a table or column name.
+func (p *sqlParser) ident(expected string) (string, bool) {
+	if p.failed {
+		return "", false
+	}
+	t := p.peek()
+	if t.kind == "qword" || (t.kind == "word" && !reserved[t.up]) {
+		p.i++
+		return strings.ToLower(t.text), true
+	}
+	p.fail(expected)
+	return "", false
+}
+
+// argName reads a sqlc.arg(...) parameter name; reserved words like limit are allowed.
+func (p *sqlParser) argName() (string, bool) {
+	if p.failed {
+		return "", false
+	}
+	t := p.peek()
+	if t.kind == "qword" || t.kind == "word" {
+		p.i++
+		return strings.ToLower(t.text), true
+	}
+	p.fail("a parameter name")
+	return "", false
+}
+
+func (p *sqlParser) addParam(name string) {
+	for _, n := range p.q.Params {
+		if n == name {
+			return
+		}
+	}
+	p.q.Params = append(p.q.Params, name)
+}
+
+// statement parses exactly one Q1, Q2 or Q3 statement and the end of the query.
+func (p *sqlParser) statement() {
+	switch {
+	case p.accept("SELECT"):
+		if p.accept("COUNT") {
+			p.count()
+		} else {
+			p.row()
+		}
+	case p.accept("INSERT"):
+		p.insert()
+	case p.accept("UPDATE"):
+		p.update()
+	default:
+		p.fail("SELECT, INSERT or UPDATE")
+	}
+	if !p.failed && p.q.Shape == "claim" && p.is("RETURNING") {
+		p.fail("end of query (a Q6 claim gives back only the number of rows it changed: annotate :execrows, no RETURNING)")
+	}
+	p.accept(";")
+	if !p.failed && p.peek().kind != "eof" {
+		if p.i > 0 && p.toks[p.i-1].up == ";" {
+			p.fail("end of query (one statement per query)")
+		} else {
+			p.fail("end of query")
+		}
+	}
+	if p.failed {
+		return
+	}
+	switch p.q.Shape {
+	case "count", "row", "page":
+		p.q.Reads = []string{p.q.Table}
+	case "claim":
+		// The WHERE reads the row in the same statement that writes it.
+		p.q.Reads, p.q.Writes = []string{p.q.Table}, []string{p.q.Table}
+	case "insert":
+		p.q.Writes = []string{p.q.Table}
+		for _, v := range p.q.Values {
+			if v.Val.Kind == "next" {
+				p.q.Reads = []string{p.q.Table}
+			}
+		}
+	}
+}
+
+// Q1: SELECT COUNT(*) FROM <table> WHERE <conds>
+func (p *sqlParser) count() {
+	p.q.Shape = "count"
+	_ = p.need("(", "( after COUNT") && p.need("*", "* in COUNT(*)") && p.need(")", ") after COUNT(*") &&
+		p.need("FROM", "FROM after COUNT(*)")
+	p.from()
+}
+
+// Q2: SELECT <col>, ... FROM <table> WHERE <conds>
+func (p *sqlParser) row() {
+	p.q.Shape = "row"
+	for {
+		col, ok := p.ident("a column name")
+		if !ok {
+			return
+		}
+		p.q.Cols = append(p.q.Cols, col)
+		if !p.accept(",") {
+			break
+		}
+	}
+	if p.need("FROM", ", or FROM after the column list") {
+		p.from()
+	}
+}
+
+func (p *sqlParser) from() {
+	table, ok := p.ident("a table name")
+	if !ok {
+		return
+	}
+	p.q.Table = table
+	if !p.need("WHERE", "WHERE after FROM "+table) {
+		return
+	}
+	for {
+		col, ok := p.ident("a column name in WHERE")
+		if !ok {
+			return
+		}
+		// Q5 keyset: <cursor> < <value> (DESC pages, newest first).
+		if p.accept("<") {
+			if p.q.Shape != "row" {
+				p.fail("= after " + col)
+				return
+			}
+			if len(p.q.Where) == 0 {
+				p.failed = true
+				*p.errs = append(*p.errs, Refusal{Pos: p.toks[p.i-1].pos, Construct: "keyset page with no equality WHERE", Context: "query " + p.q.Name,
+					Hint: "Q5 needs at least one <col> = <value> before the cursor; " + allowedSQL})
+				return
+			}
+			v, ok := p.value(col, false)
+			if !ok {
+				return
+			}
+			p.q.CursorCol, p.q.CursorVal = col, v
+			p.finishPage()
+			return
+		}
+		if !p.need("=", "= or < after "+col) {
+			return
+		}
+		v, ok := p.value(col, false)
+		if !ok {
+			return
+		}
+		p.q.Where = append(p.q.Where, sqlAssign{Col: col, Val: v})
+		if !p.accept("AND") {
+			return
+		}
+	}
+}
+
+// finishPage reads ORDER BY <cursor> DESC LIMIT <n> for Q5.
+func (p *sqlParser) finishPage() {
+	p.q.Shape = "page"
+	if !p.need("ORDER", "ORDER BY "+p.q.CursorCol+" DESC after the keyset WHERE") ||
+		!p.need("BY", "BY after ORDER") {
+		return
+	}
+	at := p.peek()
+	col, ok := p.ident("the cursor column " + p.q.CursorCol)
+	if !ok {
+		return
+	}
+	if col != p.q.CursorCol {
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "ORDER BY " + col, Context: "query " + p.q.Name,
+			Hint: "ORDER BY must use the same column as the keyset cursor (" + p.q.CursorCol + "); " + allowedSQL})
+		return
+	}
+	if !p.need("DESC", "DESC after ORDER BY "+col+" (newest first)") {
+		return
+	}
+	if p.is("OFFSET") {
+		p.fail("LIMIT (OFFSET is not in the grammar; use keyset cursors)")
+		return
+	}
+	if !p.need("LIMIT", "LIMIT after ORDER BY (a list without LIMIT is refused)") {
+		return
+	}
+	at = p.peek()
+	v, ok := p.value("limit", false)
+	if !ok {
+		return
+	}
+	if v.Kind == "int" {
+		n := 0
+		for _, c := range v.Lit {
+			if c < '0' || c > '9' {
+				p.failed = true
+				*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "LIMIT " + v.Lit, Context: "query " + p.q.Name,
+					Hint: "LIMIT literal must be a positive integer (at most page.MaxPageSize); " + allowedSQL})
+				return
+			}
+			n = n*10 + int(c-'0')
+		}
+		if n < 1 {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: fmt.Sprintf("LIMIT %d", n), Context: "query " + p.q.Name,
+				Hint: "LIMIT must be 1..page.MaxPageSize; " + allowedSQL})
+			return
+		}
+		p.q.LimitN = n
+	} else if v.Kind != "param" {
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "LIMIT that is not a parameter or integer", Context: "query " + p.q.Name,
+			Hint: allowedSQL})
+		return
+	}
+	p.q.Limit = v
+	if p.is("OFFSET") {
+		p.fail("end of query (OFFSET is not in the grammar; use keyset cursors)")
+	}
+}
+
+// Q3: INSERT INTO <table> (<col>, ...) VALUES (<value>, ...) RETURNING <col>, ...
+func (p *sqlParser) insert() {
+	p.q.Shape = "insert"
+	if !p.need("INTO", "INTO after INSERT") {
+		return
+	}
+	table, ok := p.ident("a table name")
+	if !ok || !p.need("(", "( and the column list") {
+		return
+	}
+	p.q.Table = table
+	var cols []string
+	for {
+		col, ok := p.ident("a column name")
+		if !ok {
+			return
+		}
+		cols = append(cols, col)
+		if !p.accept(",") {
+			break
+		}
+	}
+	if !p.need(")", ", or ) in the column list") || !p.need("VALUES", "VALUES") {
+		return
+	}
+	open := p.peek()
+	if !p.need("(", "( and the values") {
+		return
+	}
+	for i := 0; ; i++ {
+		if i >= len(cols) {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: open.pos, Construct: fmt.Sprintf("VALUES with more values than the %d columns", len(cols)),
+				Context: "query " + p.q.Name, Hint: "One value per column; " + allowedSQL})
+			return
+		}
+		v, ok := p.value(cols[i], true)
+		if !ok {
+			return
+		}
+		p.q.Values = append(p.q.Values, sqlAssign{Col: cols[i], Val: v})
+		if !p.accept(",") {
+			break
+		}
+	}
+	if len(p.q.Values) != len(cols) {
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: open.pos, Construct: fmt.Sprintf("VALUES with %d values for %d columns", len(p.q.Values), len(cols)),
+			Context: "query " + p.q.Name, Hint: "One value per column; " + allowedSQL})
+		return
+	}
+	if !p.need(")", ", or ) in the values") {
+		return
+	}
+	if !p.need("RETURNING", "RETURNING <col>, ... (a :one insert gives back the stored row)") {
+		return
+	}
+	for {
+		col, ok := p.ident("a column name after RETURNING")
+		if !ok {
+			return
+		}
+		p.q.Cols = append(p.q.Cols, col)
+		if !p.accept(",") {
+			return
+		}
+	}
+}
+
+// Q6: UPDATE <table> SET <col> = <value>, ... WHERE <cond> [AND <cond>]...
+// where <cond> is <col> <op> <value> or one parenthesised (<cond> OR <cond> ...).
+// The condition is checked by the statement that writes: a claim, never a
+// read followed by a write (W1). At least one condition is <col> = <parameter>
+// (which rows), and there is no RETURNING (:execrows, checked by S10).
+func (p *sqlParser) update() {
+	p.q.Shape = "claim"
+	table, ok := p.ident("a table name")
+	if !ok {
+		return
+	}
+	p.q.Table = table
+	if !p.need("SET", "SET after UPDATE "+table) {
+		return
+	}
+	for {
+		col, ok := p.ident("a column name after SET")
+		if !ok || !p.need("=", "= after "+col) {
+			return
+		}
+		v, ok := p.claimValue(col)
+		if !ok {
+			return
+		}
+		p.q.Values = append(p.q.Values, sqlAssign{Col: col, Val: v})
+		if !p.accept(",") {
+			break
+		}
+	}
+	if !p.need("WHERE", "WHERE after SET (a claim names its rows and its condition; an UPDATE without WHERE changes every row)") {
+		return
+	}
+	group := false
+	for {
+		if p.is("(") && p.peekAt(1).up != "SELECT" {
+			at := p.peek()
+			p.i++
+			if group {
+				p.failed = true
+				*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "second OR group", Context: "query " + p.q.Name,
+					Hint: "A Q6 claim has at most one parenthesised (<cond> OR <cond> ...) group; " + allowedSQL})
+				return
+			}
+			group = true
+			var any []sqlCond
+			for {
+				c, ok := p.cond()
+				if !ok {
+					return
+				}
+				any = append(any, c)
+				if !p.accept("OR") {
+					break
+				}
+			}
+			if !p.need(")", "OR or ) closing the group") {
+				return
+			}
+			if len(any) < 2 {
+				p.failed = true
+				*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "parentheses around one condition", Context: "query " + p.q.Name,
+					Hint: "Parentheses in a Q6 WHERE hold one OR group: (<cond> OR <cond> ...); " + allowedSQL})
+				return
+			}
+			p.q.Conds = append(p.q.Conds, sqlCond{Any: any})
+		} else {
+			c, ok := p.cond()
+			if !ok {
+				return
+			}
+			p.q.Conds = append(p.q.Conds, c)
+		}
+		if !p.accept("AND") {
+			break
+		}
+	}
+	for _, c := range p.q.Conds {
+		if c.Op == "=" && c.Val.Kind == "param" && c.Val.Op == "" {
+			return
+		}
+	}
+	p.failed = true
+	*p.errs = append(*p.errs, Refusal{Pos: p.q.pos, Construct: "claim update with no <col> = <parameter> condition", Context: "query " + p.q.Name,
+		Hint: "A Q6 claim names the rows it may change with <col> = ? (for example id = ?) outside any OR group; " + allowedSQL})
+}
+
+// claimOps are the comparisons allowed in a Q6 WHERE.
+var claimOps = map[string]string{"=": "=", "<>": "<>", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
+
+func (p *sqlParser) cond() (sqlCond, bool) {
+	col, ok := p.ident("a column name in WHERE")
+	if !ok {
+		return sqlCond{}, false
+	}
+	t := p.peek()
+	op, ok := claimOps[t.up]
+	if t.kind != "punct" || !ok {
+		p.fail("a comparison (= <> < <= > >=) after " + col)
+		return sqlCond{}, false
+	}
+	p.i++
+	v, ok := p.claimValue(col)
+	if !ok {
+		return sqlCond{}, false
+	}
+	return sqlCond{Col: col, Op: op, Val: v}, true
+}
+
+// claimValue is a Q4 value, or (Q6 only) a parameter plus or minus a whole
+// number, e.g. sqlc.arg(now) - 600. A bare ? is named after its column by
+// sqlc, so a second bare ? for the same column must be named with sqlc.arg.
+func (p *sqlParser) claimValue(col string) (sqlVal, bool) {
+	if p.failed {
+		return sqlVal{}, false
+	}
+	at := p.peek()
+	if at.kind == "param" {
+		for _, n := range p.q.Params {
+			if n == col {
+				p.failed = true
+				*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "second bare ? for column " + col, Context: "query " + p.q.Name,
+					Hint: "sqlc names a bare ? after its column; name this one with sqlc.arg(<name>)"})
+				return sqlVal{}, false
+			}
+		}
+	}
+	v, ok := p.value(col, false)
+	if !ok {
+		return v, false
+	}
+	if (p.is("+") || p.is("-")) && v.Kind == "param" {
+		v.Op = p.peek().up
+		p.i++
+		n := p.peek()
+		if n.kind != "num" {
+			p.fail("a whole number after " + v.Op)
+			return sqlVal{}, false
+		}
+		p.i++
+		v.Off = n.text
+	}
+	return v, true
+}
+
+// value reads a parameter, a literal, or (in an insert) the next-number shape.
+func (p *sqlParser) value(col string, insert bool) (sqlVal, bool) {
+	if p.failed {
+		return sqlVal{}, false
+	}
+	t := p.peek()
+	const expected = "a parameter (? or sqlc.arg(name)), an integer or 'text'"
+	switch {
+	case t.kind == "param":
+		p.i++
+		p.addParam(col)
+		return sqlVal{Kind: "param", Param: col}, true
+	case t.kind == "word" && t.up == "SQLC":
+		p.i++
+		if !p.need(".", ". after sqlc") || !p.need("ARG", "arg (sqlc.arg)") || !p.need("(", "( after sqlc.arg") {
+			return sqlVal{}, false
+		}
+		// Parameter names may be reserved words (e.g. sqlc.arg(limit)).
+		name, ok := p.argName()
+		if !ok || !p.need(")", ") after sqlc.arg(name") {
+			return sqlVal{}, false
+		}
+		p.addParam(name)
+		return sqlVal{Kind: "param", Param: name}, true
+	case t.kind == "num":
+		p.i++
+		return sqlVal{Kind: "int", Lit: t.text}, true
+	case t.kind == "punct" && t.up == "-" && p.peekAt(1).kind == "num":
+		p.i += 2
+		return sqlVal{Kind: "int", Lit: "-" + p.toks[p.i-1].text}, true
+	case t.kind == "str":
+		p.i++
+		return sqlVal{Kind: "string", Lit: t.text}, true
+	case insert && t.up == "(" && p.peekAt(1).up == "SELECT" && p.peekAt(2).up == "COALESCE":
+		return p.nextNumber(col)
+	}
+	p.fail(expected)
+	return sqlVal{}, false
+}
+
+// nextNumber: (SELECT COALESCE(MAX(<col>), 0) + 1 FROM <table>) for the same column and table.
+func (p *sqlParser) nextNumber(col string) (sqlVal, bool) {
+	const shape = "the next-number shape (SELECT COALESCE(MAX(<col>), 0) + 1 FROM <table>)"
+	if !(p.need("(", shape) && p.need("SELECT", shape) && p.need("COALESCE", shape) && p.need("(", shape) &&
+		p.need("MAX", shape) && p.need("(", shape)) {
+		return sqlVal{}, false
+	}
+	at := p.peek()
+	c, ok := p.ident("the column " + col)
+	if !ok {
+		return sqlVal{}, false
+	}
+	if !(p.need(")", shape) && p.need(",", shape) && p.need("0", shape) && p.need(")", shape) && p.need("+", shape) &&
+		p.need("1", shape) && p.need("FROM", shape)) {
+		return sqlVal{}, false
+	}
+	at2 := p.peek()
+	tbl, ok := p.ident("the table " + p.q.Table)
+	if !ok || !p.need(")", ") closing "+shape) {
+		return sqlVal{}, false
+	}
+	for _, chk := range []struct {
+		got, want string
+		at        sqlTok
+	}{{c, col, at}, {tbl, p.q.Table, at2}} {
+		if chk.got != chk.want {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: chk.at.pos, Construct: "next-number subquery over " + chk.got, Context: "query " + p.q.Name,
+				Hint: "The next number of `" + col + "` must come from MAX(" + col + ") of the same table " + p.q.Table + "; " + allowedSQL})
+			return sqlVal{}, false
+		}
+	}
+	return sqlVal{Kind: "next"}, true
+}
+
+func tables(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = "`" + n + "`"
+	}
+	if len(names) == 1 {
+		return "table " + quoted[0]
+	}
+	return "tables " + joinList(quoted)
+}
+
+// plural and singular turn a table name into words: line_items -> "line items" / "line item".
+func plural(table string) string { return strings.ReplaceAll(table, "_", " ") }
+
+func singular(table string) string {
+	s := plural(table)
+	switch {
+	case strings.HasSuffix(s, "ies"):
+		return s[:len(s)-3] + "y"
+	case strings.HasSuffix(s, "sses"), strings.HasSuffix(s, "xes"), strings.HasSuffix(s, "ches"), strings.HasSuffix(s, "shes"):
+		return s[:len(s)-2]
+	case strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss"):
+		return s[:len(s)-1]
+	}
+	return s
+}
+
+// norm compares SQL and Go names: customer_id ~ CustomerID.
+func norm(s string) string { return strings.ToLower(strings.ReplaceAll(s, "_", "")) }

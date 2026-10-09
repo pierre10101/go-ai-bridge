@@ -1,0 +1,50 @@
+name: Release bridge-en
+
+# Cut a release: bump VERSION in a PR, merge it, then on main:
+#   git tag v$(cat VERSION) && git push origin v$(cat VERSION)
+# The tag makes `go install github.com/pierre10101/bridge-en/cmd/bridge-en@v<version>`
+# work, and this workflow attaches the binaries + SHA256SUMS to a GitHub Release.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Tag must equal VERSION
+        run: |
+          set -euo pipefail
+          want="v$(cat VERSION)"
+          [ "${GITHUB_REF_NAME}" = "$want" ] || { echo "::error::tag ${GITHUB_REF_NAME} but VERSION says $want"; exit 1; }
+
+      - name: Run scripts/ci.sh
+        run: ./scripts/ci.sh
+
+      - name: Install sqlc v1.31.1 (smoke app only)
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+
+      - name: A new app requires this version and imports its runtime
+        run: ./scripts/smoke-app.sh
+
+      - name: Build archives
+        run: ./scripts/build-bridge-en.sh dist
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "bridge-en ${GITHUB_REF_NAME}" \
+            --notes "Pin it in an app's go.mod: go get github.com/pierre10101/bridge-en@${GITHUB_REF_NAME}. Install the matching binary: go install github.com/pierre10101/bridge-en/cmd/bridge-en@${GITHUB_REF_NAME}, or in CI uses: pierre10101/bridge-en/.github/actions/setup-bridge-en@${GITHUB_REF_NAME}. See RULEBOOK.md (attached)."
