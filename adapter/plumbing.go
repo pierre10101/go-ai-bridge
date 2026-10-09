@@ -258,6 +258,11 @@ func loadEnv(dir string) (*env, Refusals, error) {
 		return nil, nil, err
 	}
 	refusals = append(refusals, keyErrs...)
+	delErrs, err := checkDeletes(root, q) // Q10: key and ON DELETE against schema.sql
+	if err != nil {
+		return nil, nil, err
+	}
+	refusals = append(refusals, delErrs...)
 	roles, roleErrs, err := loadAppRoles(root)
 	if err != nil {
 		return nil, nil, err

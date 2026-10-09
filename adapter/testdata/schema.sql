@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS tickets (
 );
 
 -- One row per event (create_event, my_events, rename_event,
--- admin_rename_event, event_summary). organizer_id: the signed-in user who created it, and
+-- admin_rename_event, event_summary, delete_event). organizer_id: the signed-in user who created it, and
 -- created_as: the role they had then. Both come from the server
 -- (server:"user", server:"role"), never from the request. The organizer
 -- owns the event (A4): an action that a role without the ownership bypass
@@ -49,15 +49,27 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- One row per section of an event (add_section, rename_section,
--- admin_rename_section, my_events, event_summary): a block of seats with
--- its own name and capacity. A section belongs to its event's organizer
+-- admin_rename_section, delete_section, admin_delete_section, my_events,
+-- event_summary): a block of seats with its own name and capacity. A section belongs to its event's organizer
 -- (A5): it has no owner column of its own, so an action that a role
 -- without the ownership bypass may call proves, in the statement that
--- writes, that the event's organizer_id is the signed-in user.
+-- writes, that the event's organizer_id is the signed-in user. Deleting an
+-- event deletes its sections with it (ON DELETE CASCADE, Q10).
 -- owner: event_id -> events.organizer_id
 CREATE TABLE IF NOT EXISTS sections (
     id       INTEGER PRIMARY KEY,
-    event_id INTEGER NOT NULL REFERENCES events (id),
+    event_id INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
     name     TEXT    NOT NULL,
     capacity INTEGER NOT NULL CHECK (capacity > 0)
+);
+
+-- One row per seat of a section (delete_section, delete_event): a
+-- grandchild of the event (A5 chain: section_seats -> sections -> events).
+-- A section that still has seats is not deleted (ON DELETE RESTRICT, Q10):
+-- the delete fails and nothing is deleted.
+-- owner: section_id -> sections.event_id
+CREATE TABLE IF NOT EXISTS section_seats (
+    id         INTEGER PRIMARY KEY,
+    section_id INTEGER NOT NULL REFERENCES sections (id) ON DELETE RESTRICT,
+    label      TEXT    NOT NULL
 );

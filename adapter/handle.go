@@ -538,9 +538,10 @@ func (w *walker) stopStates(cond ast.Expr) map[int]string {
 			states[loc.step] = wroteNone
 		case op == token.EQL && v == "1":
 			states[loc.step] = wroteSome
-		case op == token.NEQ && v == "1" && loc.added:
+		case op == token.NEQ && v == "1" && loc.atMostOne():
 			// A Q8 names its parent row by the parent's key (checkProofs),
-			// so it adds one row or none: not exactly one is none.
+			// and a Q10 its row by the table's key (checkDeletes), so it
+			// adds or deletes one row or none: not exactly one is none.
 			states[loc.step] = wroteNone
 		}
 	}
@@ -751,7 +752,27 @@ func (w *walker) query(s *ast.AssignStmt) {
 		text, fails = fmt.Sprintf(st("insert"), singular(q.Table), q.Table, joinList(assigns), q.Name, q.File, singular(q.Table)),
 			fmt.Sprintf(st("insert fails"), w.internal())
 	case "claim":
-		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField, added: q.Source != ""}
+		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField, added: q.Source != "", deleted: q.Delete}
+		if q.Delete { // Q10: remove the rows the WHERE names by key
+			conds := make([]string, len(q.Conds))
+			for i, c := range q.Conds {
+				conds[i] = w.claimCond(c, vals, q.Table)
+			}
+			key := "delete"
+			if q.Slice != "" {
+				key = "delete n"
+			}
+			text, fails = fmt.Sprintf(st(key), singular(q.Table), q.Table, strings.Join(conds, " and "), q.Name, q.File, singular(q.Table)),
+				fmt.Sprintf(st("query fails"), w.internal())
+			for _, e := range q.OnDelete { // what schema.sql does to the rows that reference it
+				tmpl := "delete cascade"
+				if e.OnDelete == "RESTRICT" {
+					tmpl = "delete restrict"
+				}
+				text += " " + fmt.Sprintf(st(tmpl), singular(e.Table), e.Col, e.RefCol, singular(e.RefTable))
+			}
+			break
+		}
 		if q.Source != "" { // Q8: add one row from a parent row, or none
 			assigns := make([]string, len(q.Values))
 			for i, v := range q.Values {

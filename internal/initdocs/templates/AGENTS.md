@@ -35,7 +35,7 @@ copy bridge-en code into the app.
    - F2: <a long case continues on the next line,
      indented by two spaces>
    ```
-2. `features/<slice>/queries/*.sql` in the SQL shapes (Q0-Q9), then
+2. `features/<slice>/queries/*.sql` in the SQL shapes (Q0-Q10), then
    `sqlc generate`. A table whose rows belong to a user says so in
    `schema.sql`, on the comment line right above its `CREATE TABLE`:
    `-- owner: organizer_id` (A4). A table whose rows belong to rows of an
@@ -111,6 +111,14 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
   table in such a query. Copying `organizer_id` onto the child row proves
   nothing and is refused. The English says "only sections of events you
   own (`events.organizer_id` is the signed-in user)".
+- **Deletes name one row by its key (Q10).** `DELETE FROM sections WHERE
+  sections.id = sqlc.arg(id) AND <the A4 owner condition or the A5 proof>`,
+  `:execrows`, no `RETURNING`, no OR, never without `WHERE`, then
+  `if n != 1 { return Output{}, F<n> }` (for example "no such section of
+  yours", HTTP 404). Every foreign key that references the table says
+  `ON DELETE CASCADE` (its rows are deleted with it) or `ON DELETE RESTRICT`
+  (the delete fails while one exists) in schema.sql; anything else is
+  refused. A Public action never deletes from an owned or child table.
 - **A GET takes only the query values it declares (T4).** Any other query
   parameter (also another letter case, or a cache-buster like `?_=123`) is
   answered with HTTP 400, like an unknown body field. The UI sends exactly

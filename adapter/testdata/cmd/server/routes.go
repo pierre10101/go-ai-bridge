@@ -6,6 +6,8 @@ import (
 
 	"example.com/fixtures/features/add_section"
 	addsectiondb "example.com/fixtures/features/add_section/db"
+	"example.com/fixtures/features/admin_delete_section"
+	admindeletedb "example.com/fixtures/features/admin_delete_section/db"
 	"example.com/fixtures/features/admin_rename_event"
 	adminrenamedb "example.com/fixtures/features/admin_rename_event/db"
 	"example.com/fixtures/features/admin_rename_section"
@@ -18,6 +20,10 @@ import (
 	eventdb "example.com/fixtures/features/create_event/db"
 	"example.com/fixtures/features/create_invoice"
 	createdb "example.com/fixtures/features/create_invoice/db"
+	"example.com/fixtures/features/delete_event"
+	deleteeventdb "example.com/fixtures/features/delete_event/db"
+	"example.com/fixtures/features/delete_section"
+	deletesectiondb "example.com/fixtures/features/delete_section/db"
 	"example.com/fixtures/features/event_summary"
 	summarydb "example.com/fixtures/features/event_summary/db"
 	"example.com/fixtures/features/list_customer_invoices"
@@ -50,12 +56,15 @@ var AppRoles = httpx.AppRoles("customer", "organizer", "finance", "admin").Bypas
 func Routes(db *sql.DB, identity httpx.Identity) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(add_section.Route, httpx.Bind(add_section.Roles, add_section.New(addsectiondb.New(txn.DB(db))).Handle))
+	mux.Handle(admin_delete_section.Route, httpx.Bind(admin_delete_section.Roles, admin_delete_section.New(admindeletedb.New(txn.DB(db))).Handle))
 	mux.Handle(admin_rename_event.Route, httpx.Bind(admin_rename_event.Roles, admin_rename_event.New(adminrenamedb.New(txn.DB(db))).Handle))
 	mux.Handle(admin_rename_section.Route, httpx.Bind(admin_rename_section.Roles, admin_rename_section.New(adminsectiondb.New(txn.DB(db))).Handle))
 	mux.Handle(claim_example.Route, httpx.Bind(claim_example.Roles, claim_example.New(claimdb.New(txn.DB(db))).Handle))
 	mux.Handle(confirm_many.Route, httpx.Bind(confirm_many.Roles, confirm_many.New(confirmdb.New(txn.DB(db))).Handle))
 	mux.Handle(create_event.Route, httpx.Bind(create_event.Roles, create_event.New(eventdb.New(txn.DB(db))).Handle))
 	mux.Handle(create_invoice.Route, httpx.Bind(create_invoice.Roles, create_invoice.New(createdb.New(txn.DB(db))).Handle))
+	mux.Handle(delete_event.Route, httpx.Bind(delete_event.Roles, delete_event.New(deleteeventdb.New(txn.DB(db))).Handle))
+	mux.Handle(delete_section.Route, httpx.Bind(delete_section.Roles, delete_section.New(deletesectiondb.New(txn.DB(db))).Handle))
 	mux.Handle(event_summary.Route, httpx.Bind(event_summary.Roles, event_summary.New(summarydb.New(txn.DB(db))).Handle))
 	mux.Handle(list_customer_invoices.Route, httpx.Bind(list_customer_invoices.Roles, list_customer_invoices.New(listdb.New(txn.DB(db))).Handle))
 	mux.Handle(my_events.Route, httpx.Bind(my_events.Roles, my_events.New(myeventsdb.New(txn.DB(db))).Handle))

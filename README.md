@@ -30,6 +30,12 @@ compare the two: what was asked, and what was built.
   signed-in user's (an insert from the caller's parent row, or an
   `IN (SELECT ...)` proof subquery). The English says "only sections of
   events you own".
+- A delete (Q10) names its rows by the table's key and checks the count
+  (`if deleted != 1`); on owned and child tables it is limited to the
+  caller's rows exactly like an update. Every foreign key that points at
+  the table must say ON DELETE CASCADE or ON DELETE RESTRICT, and the
+  English says which: "Each section ... is deleted with it" or "... schema.sql
+  refuses the delete (ON DELETE RESTRICT)".
 - Requests are strict: a body field or a GET query parameter the action
   does not declare is answered with HTTP 400.
 - [RULEBOOK.md](RULEBOOK.md) is the reference: every rule with an example, its
@@ -53,10 +59,10 @@ same version (`-check` refuses any other).
 ```sh
 mkdir seat-app && cd seat-app && git init -q
 go mod init example.com/seat-app
-go get github.com/pierre10101/go-ai-bridge@v0.5.0
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.5.0
+go get github.com/pierre10101/go-ai-bridge@v0.6.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.6.0
 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-bridge-en -version                      # bridge-en 0.5.0
+bridge-en -version                      # bridge-en 0.6.0
 ```
 
 **2. Init.** Writes the instructions for AI agents (and you). Documents only,
@@ -201,7 +207,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0   # the version go.mod pins
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0   # the version go.mod pins
       - run: go test ./...
       - run: bridge-en -check features/*/
   english:
@@ -215,8 +221,8 @@ jobs:
         with: { fetch-depth: 0 }    # the comment diffs against the PR's base
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.5.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.6.0
         # with: { features: "features/*/", max-chars: "60000" }
 ```
 
@@ -242,6 +248,36 @@ git diff                         # review every .en change, then open a PR
 
 A new version can change the English of every feature (new wording, new
 rules); the `.en` diff in that pull request shows exactly how.
+
+### 0.5.x to 0.6.0: deletes (Q10)
+
+0.6.0 adds Q10, the first allowed DELETE. It is **not a breaking change**
+for an app: DELETE was refused before, so no 0.5.x app has one; no rule
+refuses anything it accepted, and its `.en` files do not change (only the
+fix-it hints of some refusals now mention DELETE). To upgrade, move the pin
+and the binary to v0.6.0 and run `bridge-en init -force` to get the 0.6.0
+`AGENTS.md` (Q10). To add a delete:
+
+1. Make sure every foreign key that references the table (and every table
+   an ON DELETE CASCADE reaches from it) says what happens to the
+   referencing rows: `REFERENCES sections (id) ON DELETE CASCADE` (they
+   are deleted with it) or `ON DELETE RESTRICT` (the delete fails while
+   one exists: HTTP 500, nothing deleted). No `ON DELETE`, `NO ACTION`,
+   `SET NULL` and `SET DEFAULT` are refused at `-check`. Changing the
+   schema of an existing database needs a migration of your own (SQLite
+   rebuilds the table to change a foreign key).
+2. Write the query: `:execrows`, `DELETE FROM <table> WHERE <key> =
+   sqlc.arg(<key>) [AND <col> = <value>]...` (or `<key> IN
+   (sqlc.slice(<name>))`), no `RETURNING`, no OR. On an owned table add
+   `AND <owner col> = sqlc.arg(<owner col>)`; on a child table add the Q9
+   proof `AND <table>.<fk> IN (SELECT <parent>.<key> FROM <parent> WHERE
+   <parent>.<owner col> = sqlc.arg(<owner col>))`; pass `in.User` for it.
+   An action only bypass roles may call needs neither.
+3. Check the count: `if deleted != 1 { return Output{}, F<n> }` with a
+   failure case such as "no such section of yours" (HTTP 404) in
+   `intent.md`.
+4. Add checks: over HTTP against SQLite, user B deleting A's row gets HTTP
+   404 and nothing is deleted (see `adapter/testdata/good/delete_section`).
 
 ### 0.4.x to 0.5.0: breaking change (inherited ownership)
 
@@ -454,7 +490,7 @@ cmd/bridge-en/            the CLI (render, -check, -write, init, pr-comment)
 adapter/                  the compiler: grammar.go (rule list), templates.go (every English word),
                           intent.go (I1-I3), parse/handle/expr.go, sql.go, domain.go, plumbing.go,
                           schema.go (keys, A4/A5 owner annotations), owner.go (A4), inherit.go (A5),
-                          check.go, pin.go
+                          delete.go (Q10 keys and ON DELETE), check.go, pin.go
 adapter/testdata/         a parse-only fixture app: good/ (render, with golden .en and checks),
                           bad/ (refused, want.err), bad_intent/ (intent refusals, want.err)
 internal/initdocs/        the AGENTS.md and pointer templates (go:embed) for bridge-en init
@@ -487,13 +523,14 @@ and publishes the archives, `RULEBOOK.md` and `SHA256SUMS`.
 | `adapter TestRolesContract`, `TestRolesRefusals`, `TestAppRoles` | A1-A3, T3: who may call each action, the app-wide role list, the signed-in user and role in the English, and every refused form |
 | `adapter TestOwnershipEnglish`, `TestOwnershipRefusals`, `TestOwnerAnnotations`, `TestBypassOwnership` | A4: the "Ownership:" sentence of every step on an owned table; an unscoped write, a write scoped to a request field or a literal, a Public writer, a given-away row, a user of another type, a malformed annotation and a malformed bypass are refused at `file:line:col` |
 | `adapter TestInheritedEnglish`, `TestInheritedRefusals`, `TestInheritedAnnotations` | A5, Q8, Q9: the "Ownership:" sentence of every step on a child table (also a 3-level chain); an unproved insert or update, a proof bound to a request field or one level short, a copied owner column, a moved parent, a Public writer and every malformed inherited annotation (unknown column or table, unowned parent, wrong column, type mismatch, no key, cycle, 4-level chains) are refused at `file:line:col` |
+| `adapter TestDeleteEnglish`, `TestDeleteRefusals`, `TestDeleteSchema` | Q10: the English of a delete (one row, a key list, ON DELETE CASCADE and RESTRICT, the cascaded table in the contract); a delete limited by a request field, a literal or a copied owner, without the proof, in a Public action, without its count check, and W1 on a cascaded table are refused; a delete not by the single-column key, and any foreign key (also through a cascade) without ON DELETE CASCADE or RESTRICT, are refused at `file:line:col` |
 | `runtime/httpx TestStrictQueryRule` | T4: a GET with an undeclared query parameter (any letter case, a path name) is HTTP 400 and the action does not run |
 | `runtime/httpx TestRolesRule`, `TestZeroAccessDeniesEveryone`, `TestPublicRule`, `TestUserAndRoleAreNeverSent` | 401 / 403 before the action runs, deny by default, the signed-in user and role filled by the server and never accepted from the request |
 | `adapter TestClock*`, `TestSession*`, `TestRollbackWording`, `TestStrictClaimCheck`, `TestMultiRowClaim*`, `TestINShapes`, `TestPrimaryKeys`, `TestSQLShapes`, `TestClaimRules`, `TestRefusalsInHandle`, `TestDomainUnderGrammar`, `TestBoundNeedsTxn`, `TestCheckPin` | the exact English and refusals of each rule (see RULEBOOK.md) |
 | `internal/initdocs Test*` | init writes only the five documents, keeps existing files without `-force`, and AGENTS.md covers the workflow |
 | `internal/prcomment Test*` | the comment shows each changed feature's intent (full or diff) and `.en` diff, starts with its marker, is the same on every run, and stays under its size limit |
 | `runtime/... Test*` | every HTTP and transaction sentence the English quotes |
-| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency; over HTTP, 401, 403 and the allowed roles (create_event, create_invoice, list_customer_invoices), nothing written on 401/403; organizer B cannot rename organizer A's event (rename_event, nothing written) while an admin can (admin_rename_event); organizer B cannot add a section to, or rename a section of, organizer A's event (add_section, rename_section: HTTP 404, nothing written) while an admin can rename it (admin_rename_section); an undeclared query parameter is HTTP 400 (list_customer_invoices, my_events) |
+| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency; over HTTP, 401, 403 and the allowed roles (create_event, create_invoice, list_customer_invoices), nothing written on 401/403; organizer B cannot rename organizer A's event (rename_event, nothing written) while an admin can (admin_rename_event); organizer B cannot add a section to, or rename a section of, organizer A's event (add_section, rename_section: HTTP 404, nothing written) while an admin can rename it (admin_rename_section); organizer B cannot delete organizer A's section or event (delete_section, delete_event: HTTP 404, nothing deleted), a section with seats is not deleted (ON DELETE RESTRICT) and an event's sections go with it (ON DELETE CASCADE), while an admin can delete any section (admin_delete_section); an undeclared query parameter is HTTP 400 (list_customer_invoices, my_events) |
 
 ## License
 

@@ -19,8 +19,15 @@ import (
 // SQLQuery is one sqlc-annotated query in queries/*.sql, parsed into a shape.
 type SQLQuery struct {
 	Name, Cmd, File string
-	Shape           string // "count" (Q1), "row" (Q2), "insert" (Q3), "page" (Q5) or "claim" (Q6, and Q8)
+	Shape           string // "count" (Q1), "row" (Q2), "insert" (Q3), "page" (Q5) or "claim" (Q6, and Q8, Q10)
 	Table           string
+	// Delete marks a Q10 delete: DELETE FROM <Table> WHERE <Conds>. It is a
+	// claim with no SET: it names its rows by the table's key, checks its
+	// conditions in the statement that deletes, and S10 (or S11) checks how
+	// many rows it removed. OnDelete is what schema.sql does to the rows
+	// that reference a deleted row (checkDeletes), for the English.
+	Delete   bool
+	OnDelete []fkEffect
 	// Source is, for a Q8 insert from a parent row (INSERT INTO <Table> (...)
 	// SELECT ... FROM <Source> WHERE ...), the parent table; Conds are then
 	// that SELECT's WHERE conditions (on Source). A Q8 is a claim: it adds
@@ -106,7 +113,7 @@ type sqlTok struct {
 var nameRe = regexp.MustCompile(`^--\s*name:\s*(\w+)\s+(:\w+)`)
 
 // allowedSQL is the hint attached to every SQL refusal.
-const allowedSQL = "allowed SQL shapes: Q1 count, Q2 one row, Q3 insert, Q5 keyset page, Q6 claim update, Q7 IN list, Q8 insert from a parent row, Q9 proof subquery (see bridge-en -grammar)"
+const allowedSQL = "allowed SQL shapes: Q1 count, Q2 one row, Q3 insert, Q5 keyset page, Q6 claim update, Q7 IN list, Q8 insert from a parent row, Q9 proof subquery, Q10 delete (see bridge-en -grammar)"
 
 // LoadQueries reads every queries/*.sql file in dir, keyed by query name.
 // Unrecognised SQL is returned as Refusals; refused queries are still in the
@@ -156,13 +163,17 @@ func parseSQLFile(path string, out map[string]*SQLQuery, errs *Refusals) error {
 					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation " + cur.Cmd + " on an insert from a parent row", Context: "Q0 query annotation",
 						Hint: "A Q8 insert from a parent row adds one row or none: annotate it :execrows and check that number is exactly 1 (S10)"})
 					cur.bad = true
+				case cur.Cmd != ":execrows" && cur.Delete:
+					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation " + cur.Cmd + " on a delete", Context: "Q0 query annotation",
+						Hint: "A Q10 delete answers with the number of rows it removed: annotate it :execrows and check that number is exactly 1 (S10)"})
+					cur.bad = true
 				case cur.Cmd != ":execrows" && cur.Shape == "claim":
 					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation " + cur.Cmd + " on a claim update", Context: "Q0 query annotation",
 						Hint: "A Q6 claim answers with the number of rows it changed: annotate it :execrows and check that number is exactly 1 (S10)"})
 					cur.bad = true
 				case cur.Cmd == ":execrows" && cur.Shape != "claim":
 					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation :execrows on a non-claim shape", Context: "Q0 query annotation",
-						Hint: ":execrows is only for Q6 claim updates"})
+						Hint: ":execrows is only for Q6 claim updates, Q8 inserts from a parent row and Q10 deletes"})
 					cur.bad = true
 				}
 			}
@@ -190,7 +201,7 @@ func parseSQLFile(path string, out map[string]*SQLQuery, errs *Refusals) error {
 			}
 			if cur.Cmd != ":one" && cur.Cmd != ":many" && cur.Cmd != ":execrows" {
 				*errs = append(*errs, Refusal{Pos: pos, Construct: "query annotation " + cur.Cmd, Context: "Q0 query annotation",
-					Hint: "Only :one (Q1-Q3), :many (Q5 keyset page) or :execrows (Q6 claim update) are in the grammar"})
+					Hint: "Only :one (Q1-Q3), :many (Q5 keyset page) or :execrows (Q6 claim update, Q8 insert from a parent row, Q10 delete) are in the grammar"})
 				cur.bad = true
 			}
 			continue
@@ -385,6 +396,8 @@ func (p *sqlParser) construct(t sqlTok) string {
 		return "end of statement"
 	case t.up == "RETURNING" && p.q.Source != "":
 		return "RETURNING on an insert from a parent row"
+	case t.up == "RETURNING" && p.q.Delete:
+		return "RETURNING on a DELETE"
 	case t.up == "RETURNING" && p.q.Shape == "claim":
 		return "RETURNING on an UPDATE"
 	case t.up == "OR" && prev == "INSERT":
@@ -465,11 +478,16 @@ func (p *sqlParser) statement() {
 		p.insert()
 	case p.accept("UPDATE"):
 		p.update()
+	case p.accept("DELETE"):
+		p.del()
 	default:
-		p.fail("SELECT, INSERT or UPDATE")
+		p.fail("SELECT, INSERT, UPDATE or DELETE")
 	}
 	if !p.failed && p.q.Source != "" && p.is("RETURNING") {
 		p.fail("end of query (a Q8 insert from a parent row adds one row or none: annotate :execrows, no RETURNING, and check the count with != 1, S10)")
+	}
+	if !p.failed && p.q.Delete && p.is("RETURNING") {
+		p.fail("end of query (a Q10 delete gives back only the number of rows it removed: annotate :execrows, no RETURNING, and check the count with != 1, S10)")
 	}
 	if !p.failed && p.q.Shape == "claim" && p.is("RETURNING") {
 		p.fail("end of query (a Q6 claim gives back only the number of rows it changed: annotate :execrows, no RETURNING)")
@@ -505,6 +523,7 @@ func (p *sqlParser) statement() {
 		p.q.Reads = append([]string{p.q.Table}, subTables...)
 	case "claim":
 		// The WHERE reads the row in the same statement that writes it.
+		// A delete's cascades are added by checkDeletes (schema.sql).
 		p.q.Reads, p.q.Writes = append([]string{p.q.Table}, subTables...), []string{p.q.Table}
 		if p.q.Source != "" { // Q8: reads the parent row, adds a row to Table
 			p.q.Reads = []string{p.q.Source}
@@ -863,6 +882,64 @@ func (p *sqlParser) update() {
 	p.failed = true
 	*p.errs = append(*p.errs, Refusal{Pos: p.q.pos, Construct: "claim update with no <col> = <parameter> condition", Context: "query " + p.q.Name,
 		Hint: "A Q6 claim names the rows it may change with <col> = ? (for example id = ?), or with <key> IN (sqlc.slice(<name>)) (Q7), outside any OR group; " + allowedSQL})
+}
+
+// Q10: DELETE FROM <table> WHERE <cond> [AND <cond>]... where <cond> is
+// <col> = <value>, <key> IN (sqlc.slice(<name>)) (Q7) or a Q9 proof
+// subquery: no OR, no other comparison, no RETURNING. It is a claim with no
+// SET (:execrows, checked by S10 or S11); checkClaimKeys requires one
+// condition to name the rows by the table's single-column PRIMARY KEY, and
+// checkDeletes what schema.sql does to the rows that reference them.
+func (p *sqlParser) del() {
+	p.q.Shape, p.q.Delete = "claim", true
+	if !p.need("FROM", "FROM after DELETE") {
+		return
+	}
+	table, ok := p.ident("a table name")
+	if !ok {
+		return
+	}
+	p.q.Table = table
+	if t := p.peek(); !p.is("WHERE") && (t.kind == "eof" || t.up == ";") {
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: t.pos, Construct: "DELETE without WHERE", Context: "query " + p.q.Name,
+			Hint: "A DELETE without WHERE removes every row of " + table + ". A Q10 delete names its rows by the table's key: DELETE FROM " + table + " WHERE <key> = sqlc.arg(<key>) [AND <col> = <value>]... (or <key> IN (sqlc.slice(<name>)), Q7)"})
+		return
+	}
+	if !p.need("WHERE", "WHERE after DELETE FROM "+table+" (a delete names its rows by their key)") {
+		return
+	}
+	for {
+		at := p.peek()
+		if p.is("(") && p.peekAt(1).up != "SELECT" {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "parenthesised condition in a delete", Context: "query " + p.q.Name,
+				Hint: "A Q10 delete joins its conditions with AND only (no OR group): <col> = <value>, <key> IN (sqlc.slice(<name>)) or the Q9 proof subquery"})
+			return
+		}
+		c, ok := p.cond(table, false)
+		if !ok {
+			return
+		}
+		if c.Op != "=" && c.Op != "in" && c.Op != "sub" || c.Val.Op != "" {
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "comparison " + c.Col + " " + c.Op + " " + sqlValText(c.Val) + " in a delete", Context: "query " + p.q.Name,
+				Hint: "A Q10 delete compares only with = (and the key with IN (sqlc.slice(<name>)), Q7, or the Q9 proof subquery); a condition on time or ranges belongs in a Q6 claim that marks the row instead"})
+			return
+		}
+		p.q.Conds = append(p.q.Conds, c)
+		if !p.accept("AND") {
+			break
+		}
+	}
+	for _, c := range p.q.Conds {
+		if (c.Op == "=" && c.Val.Kind == "param") || c.Op == "in" {
+			return
+		}
+	}
+	p.failed = true
+	*p.errs = append(*p.errs, Refusal{Pos: p.q.pos, Construct: "delete with no <key> = <parameter> condition", Context: "query " + p.q.Name,
+		Hint: "A Q10 delete names the rows it removes by the table's key: <key> = sqlc.arg(<key>), or <key> IN (sqlc.slice(<name>)) (Q7); " + allowedSQL})
 }
 
 // claimOps are the comparisons allowed in a Q6 WHERE.
@@ -1312,3 +1389,11 @@ func singular(table string) string {
 
 // norm compares SQL and Go names: customer_id ~ CustomerID.
 func norm(s string) string { return strings.ToLower(strings.ReplaceAll(s, "_", "")) }
+
+// sqlValText is a value as written in SQL, for refusals.
+func sqlValText(v sqlVal) string {
+	if v.Kind == "param" {
+		return sqlParamText(v)
+	}
+	return v.Lit
+}

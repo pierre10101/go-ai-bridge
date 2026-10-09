@@ -209,6 +209,9 @@ func (w *walker) childOwnership(s ast.Stmt, q *SQLQuery, o *owner) string {
 		if q.Source != "" {
 			return fmt.Sprintf(t("child insert"), singular(q.Table), chainRow(o.Parent), col, singular(o.Parent.Table))
 		}
+		if q.Delete {
+			return fmt.Sprintf(t("owned delete"), rows, col)
+		}
 		return fmt.Sprintf(t("owned update"), rows, col)
 	}
 	if bypass := w.bypassRoles(); bypass != nil {
@@ -235,19 +238,23 @@ func (w *walker) childOwnership(s ast.Stmt, q *SQLQuery, o *owner) string {
 		w.refuse(n, construct, "A5 inherited ownership", hint)
 	}
 	from := fmt.Sprintf("table %s (query %s), which inherits its owner from %s,", q.Table, q.Name, o.Parent.Table)
+	verb := "write to " // a Q10 delete says "delete from"
+	if q.Delete {
+		verb = "delete from "
+	}
 	switch {
 	case w.f.Public:
-		refuse(s, "write to "+from+" in a Public action")
+		refuse(s, verb+from+" in a Public action")
 	case w.userField() == nil:
-		refuse(s, "write to "+from+" in an action without the signed-in user")
+		refuse(s, verb+from+" in an action without the signed-in user")
 	case other != "":
-		refuse(otherAt, fmt.Sprintf("write to %s whose proof compares %s with %s, which is not the signed-in user", from, col, other))
+		refuse(otherAt, fmt.Sprintf("%s%s whose proof compares %s with %s, which is not the signed-in user", verb, from, col, other))
 	case !proven && w.copiesOwner(q, r.Col):
-		refuse(s, fmt.Sprintf("write to table %s (query %s) that proves ownership with its own copy of %s, which proves nothing: %s inherits its owner from %s through %s", q.Table, q.Name, r.Col, q.Table, o.Parent.Table, o.Col))
+		refuse(s, fmt.Sprintf("%stable %s (query %s) that proves ownership with its own copy of %s, which proves nothing: %s inherits its owner from %s through %s", verb, q.Table, q.Name, r.Col, q.Table, o.Parent.Table, o.Col))
 	case !proven && q.Shape == "insert":
 		refuse(s, fmt.Sprintf("insert into %s that does not prove the %s is the signed-in user's", from, singular(o.Parent.Table)))
 	case !proven:
-		refuse(s, fmt.Sprintf("write to %s whose WHERE does not prove the %s is the signed-in user's", from, singular(o.Parent.Table)))
+		refuse(s, fmt.Sprintf("%s%s whose WHERE does not prove the %s is the signed-in user's", verb, from, singular(o.Parent.Table)))
 	}
 	if q.Shape == "claim" && q.Source == "" {
 		for _, v := range q.Values {
@@ -318,5 +325,5 @@ func (w *walker) copiesOwner(q *SQLQuery, col string) bool {
 // SQL that proves it), {owner}, {type} and {param} (the chain's owner column,
 // the user field's Go type and sqlc's Go name of the parameter) are filled in.
 const childWriteHint = "Table {table} inherits its owner from {parent} through {col} ({at}), so an action that a role without the ownership bypass may call proves, in the statement that writes, that the {parent} row is the signed-in user's: {shape}. " +
-	"The action passes exactly the signed-in user for sqlc.arg({owner}) (User {type} `json:\"user\" server:\"user\"`, then {param}: in.User). A copy of {owner} on the {table} row, a request field or a Public action never counts, and a claim never changes {col}. " +
+	"The action passes exactly the signed-in user for sqlc.arg({owner}) (User {type} `json:\"user\" server:\"user\"`, then {param}: in.User). A copy of {owner} on the {table} row, a request field or a Public action never counts, and a claim never changes {col}; a DELETE has the same proof in its WHERE. " +
 	"If only administrators may do this, declare Roles with roles that bypass ownership (in cmd/server: httpx.AppRoles(...).BypassOwnership(\"admin\"))"

@@ -110,7 +110,7 @@ func (w *walker) changedCond(e *ast.BinaryExpr, loc *local) string {
 				w.refuse(e, "comparison with the length of in."+name+", which is not the list of the claim in step "+fmt.Sprint(loc.step)+" (in."+loc.list+")",
 					"S11 multi-row claim check", strings.NewReplacer("<changed>", types.ExprString(e.X), "<List>", loc.list).Replace(multiCheckHint))
 			default:
-				return fmt.Sprintf(t("changed not len"), plural(loc.table), loc.step, plural(loc.table), fmt.Sprintf(t("request field"), json))
+				return fmt.Sprintf(t(loc.countKey("changed not len")), plural(loc.table), loc.step, plural(loc.table), fmt.Sprintf(t("request field"), json))
 			}
 			return "?"
 		}
@@ -138,10 +138,7 @@ func (w *walker) changedCond(e *ast.BinaryExpr, loc *local) string {
 			"Compare a Q6 result only as != 1 (the check), == 1 or == 0")
 		return "?"
 	}
-	if loc.added {
-		key = strings.Replace(key, "changed", "added", 1)
-	}
-	return fmt.Sprintf(t(key), singular(loc.table), loc.step)
+	return fmt.Sprintf(t(loc.countKey(key)), singular(loc.table), loc.step)
 }
 
 // listInput matches in.<Field> where Field is a D10 list input.
@@ -303,10 +300,7 @@ func (w *walker) localName(name string, loc *local) string {
 	case "count":
 		return fmt.Sprintf(t("count value"), plural(loc.table), loc.where)
 	case "changed":
-		if loc.added {
-			return fmt.Sprintf(t("added value"), plural(loc.table), loc.step)
-		}
-		return fmt.Sprintf(t("changed value"), plural(loc.table), loc.step)
+		return fmt.Sprintf(t(loc.countKey("changed value")), plural(loc.table), loc.step)
 	case "row":
 		return fmt.Sprintf(t("row"), loc.phrase)
 	case "rows":

@@ -129,7 +129,25 @@ type local struct {
 	list    string   // changed, multi: the list input (Go field name) its IN list is bound to
 	nested  int      // changed: the line of the first guard that tests the check inside a compound condition
 	added   bool     // changed: a Q8 insert from a parent row (adds one row or none), not a Q6 update
+	deleted bool     // changed: a Q10 delete (removes rows), not a Q6 update
 }
+
+// countKey turns a template key about a claim's changed rows ("changed
+// none") into the one for what the claim does: added (Q8) or deleted (Q10).
+func (l *local) countKey(key string) string {
+	switch {
+	case l.added:
+		return strings.Replace(key, "changed", "added", 1)
+	case l.deleted:
+		return strings.Replace(key, "changed", "deleted", 1)
+	}
+	return key
+}
+
+// atMostOne reports whether the claim changes one row or none: a Q8 insert
+// from a parent row, or a Q10 delete by <key> = <parameter> (checkDeletes:
+// the key is the table's single-column PRIMARY KEY).
+func (l *local) atMostOne() bool { return l.added || l.deleted && !l.multi }
 
 // ParseAction parses <dir>/action.go and <dir>/queries/*.sql, reads the
 // app's internal/domain and the runtime's httpx sentences, and accepts only

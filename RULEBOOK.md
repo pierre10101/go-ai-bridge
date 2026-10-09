@@ -28,7 +28,7 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Declarations: D1-D10](#declarations-d1-d10)
 - [Statements: S1-S11](#statements-s1-s11)
 - [Expressions: E1-E7](#expressions-e1-e7)
-- [SQL: Q0-Q9](#sql-q0-q9)
+- [SQL: Q0-Q10](#sql-q0-q10)
 - [Rules across statements: T1-T4, W1](#rules-across-statements-t1-t4-w1)
 - [Who may call it: A1-A5](#who-may-call-it-a1-a5)
 - [Outside the slice: M1-M3, H1](#outside-the-slice-m1-m3-h1)
@@ -50,11 +50,11 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.5.0
+go get github.com/pierre10101/go-ai-bridge@v0.6.0
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.5.0
-bridge-en -version                      # bridge-en 0.5.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.6.0
+bridge-en -version                      # bridge-en 0.6.0
 ```
 
 Then `bridge-en init` writes `AGENTS.md` and pointer files for AI agents
@@ -64,7 +64,7 @@ into the app (documents only; see
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.5.0
+require github.com/pierre10101/go-ai-bridge v0.6.0
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -75,9 +75,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -98,12 +98,19 @@ and the app runs that same runtime: both come from the one module version in
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.5.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.5.0), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.6.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.6.0), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
-diff of every `.en` file, commit. 0.5.0 is a breaking change: a table
+diff of every `.en` file, commit. 0.6.0 adds DELETE (Q10): a delete names
+its rows by the table's key, is checked like a claim (S10), is limited to
+the caller's rows on owned (A4) and child (A5) tables exactly like an
+update, and is refused unless every foreign key that references the table
+says ON DELETE CASCADE or ON DELETE RESTRICT; nothing an app wrote for
+0.5.x changes (DELETE was refused before), but the refusal hints of A4 and
+A5 now mention DELETE, so an app pinning 0.6.0 regenerates no `.en` unless
+it adopts Q10; see README.md, "0.5.x to 0.6.0". 0.5.0 was a breaking change: a table
 whose rows belong to rows of an owned table names its parent
 (`-- owner: <fk> -> <parent>.<pcol>`, A5), and then every write to it from
 an action a non-admin role may call proves, in the statement that writes,
@@ -148,7 +155,7 @@ A slice:
 features/<slice>/
   intent.md          why, inputs, outputs, "## Failure cases" F1..Fn (I1-I3; write this FIRST)
   action.go          Route, Roles, Input, Output, F-IDs, Action, New, Handle (D1-D10, S1-S11, A1)
-  queries/*.sql      plain SQL with sqlc annotations (Q0-Q9)
+  queries/*.sql      plain SQL with sqlc annotations (Q0-Q10)
   db/                sqlc-generated code (never edited by hand)
   checks/*_test.go   one TestF<n>_... per F-ID, referencing <slice>.F<n>
   <slice>.en         golden English (bridge-en -write), reviewed in the pull request
@@ -170,7 +177,7 @@ Sign-in, password hashing and sessions are the app's own code, outside
 
 1. Write `intent.md` with every failure case (F1..Fn) in English **before any
    code**, in the I2 format: `- F<n>: <text>` under `## Failure cases`.
-2. Write `queries/*.sql` (Q0-Q9) and run `sqlc generate`.
+2. Write `queries/*.sql` (Q0-Q10) and run `sqlc generate`.
 3. Write `action.go` inside D1-D10 / S1-S11, declaring who may call it
    (`var Roles = httpx.Roles("<role>", ...)` or `httpx.Public`, A1).
 4. Write one check per F-ID in `checks/` (`func TestF<n>_...` that references
@@ -560,6 +567,7 @@ says, for each earlier write:
 | an insert (Q3) before it; or a claim, after a guard that stops unless exactly one row changed (`!= 1`), unless one row per entry of its list changed (S11, `!= int64(len(in.<List>))`) or unless one did (`== 0`) | `The write in step 2 is rolled back.` |
 | a claim whose count is not known yet: a read right after it, or the `!= 1` (or S11) guard itself (0 rows, or several) | `Any change made in step 2 is rolled back.` |
 | a guard whose condition includes `<n> == 0` (`claimed == 0 && ...`): it stops only when the claim changed nothing | `Nothing was written in step 2, so there is nothing to roll back.` |
+| the `!= 1` guard of a Q10 delete by `<key> = <value>`: it removes one row or none (`delete_section.en`: ``2. If not exactly one section was deleted in step 1, stop with F1: ...``) | `Nothing was written in step 1, so there is nothing to roll back.` |
 | the `!= 1` guard of a Q8 insert from a parent row: it names its parent by the parent's key, so it adds one row or none (`add_section.en`: ``4. If not exactly one section was added in step 3, stop with F3: ...``) | `Nothing was written in step 3, so there is nothing to roll back.` |
 
 The failure index says the same per F-ID: `before any write`, `after a write
@@ -699,7 +707,7 @@ Refused: `struct{ X int }{1}` or a closure - `refused: function literal (closure
 
 ---
 
-## SQL: Q0-Q9
+## SQL: Q0-Q10
 
 `queries/*.sql`, read by a strict shape parser. Anything outside a shape is
 refused at `file:line:col`.
@@ -707,7 +715,7 @@ refused at `file:line:col`.
 ### Q0
 
 **query** - `-- name: <Query> :one|:many|:execrows`, then exactly one
-statement. `:one` is Q1-Q3, `:many` only Q5, `:execrows` only Q6 or Q8.
+statement. `:one` is Q1-Q3, `:many` only Q5, `:execrows` only Q6, Q8 or Q10.
 
 Refused: `:many` on a non-page select - `refused: query annotation :many on a non-page shape is not in the allowed pattern list (Q0 query annotation)`
 
@@ -992,6 +1000,87 @@ Refused:
   `queries/count_sections.sql:5:7: refused: subquery on sections.event_id, but table sections does not inherit its owner is not in the allowed pattern list (A5 inherited ownership). A Q9 subquery is only the proof that a child row's parent is the signed-in user's ...`
 - other forms (`TestInheritedRefusals`): inside an OR group - `refused: subquery inside an OR group ...`; a second condition in the subquery - `refused: subquery on events with 2 conditions ...`; the wrong key - `refused: subquery sections.event_id IN (SELECT events.organizer_id ...), but sections.event_id holds the key events.id ...`; a proof one level short in a chain - `refused: condition on sections.event_id where the proof is sections.event_id IN (SELECT events.id FROM events ...) ...`
 
+### Q10
+
+**delete** - the only DELETE: it names its rows by the table's key, checks
+its conditions in the statement that deletes, and the action checks how
+many rows it removed.
+
+```sql
+-- name: DeleteOwnSection :execrows
+DELETE FROM sections
+WHERE sections.id = sqlc.arg(id)
+  AND sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id));
+```
+```go
+deleted, err := a.q.DeleteOwnSection(ctx, db.DeleteOwnSectionParams{ID: in.SectionID, OrganizerID: in.User})
+if err != nil {
+	return Output{}, err
+}
+if deleted != 1 {
+	return Output{}, F1 // 404 "no such section of yours"
+}
+```
+
+- `DELETE FROM <table> WHERE <cond> [AND <cond>]...`, one table;
+- `<cond>` is `<col> = <value>`, `<key> IN (sqlc.slice(<name>))` (Q7, last
+  parameter) or the Q9 proof subquery; no OR, no parentheses, no `<`/`>`
+  or offset, no other subquery, no `RETURNING`, never without `WHERE`;
+- one condition names the rows by `<key>`, the table's single-column
+  `PRIMARY KEY` in `schema.sql` (`<key> = <parameter>`, or the Q7 list), so a
+  delete removes at most one row per key value: never an unbounded delete;
+- `:execrows`, checked by S10 (`if n != 1`) or, over a list, S11; 0 rows is
+  a failure case (typically HTTP 404 "no such ... of yours") and nothing
+  is deleted, so the guard says "Nothing was written";
+- A4 and A5 apply exactly as to a Q6 update (see A4, A5): on an owned table
+  the `WHERE` has `<owner col> = sqlc.arg(...)` bound to `in.User`, on a
+  child table the Q9 proof; roles that all bypass ownership skip it; a
+  `Public` action never deletes from an owned or child table.
+
+**Rows that reference a deleted row (grandchildren).** `-check` reads every
+foreign key in `schema.sql` that references the table (`<col> ... REFERENCES
+<table> [(<key>)]`, or `[CONSTRAINT <name>] FOREIGN KEY (<col>) REFERENCES
+...`), and follows ON DELETE CASCADE to every table it reaches. Each of them
+must declare one of:
+
+- `ON DELETE CASCADE`: the rows are deleted with it, and the English says
+  so (they are also writes: the contract lists their table, and W1 refuses a
+  read of it earlier in the action);
+- `ON DELETE RESTRICT`: the delete fails while such a row exists; the query
+  fails (HTTP 500), the transaction is rolled back and nothing is deleted,
+  and the English says so.
+
+Anything else is refused: no `ON DELETE` (SQLite's NO ACTION would fail the
+delete with no word in the English), `NO ACTION`, `SET NULL` and `SET
+DEFAULT` (they would change rows the English does not mention). Why so
+strict: the database, not the action, decides what happens to the
+grandchildren, so the decision has to be written where the reviewer sees it
+(the schema) and said where the reviewer reads (the `.en`). `store.Open`
+turns foreign keys on (`PRAGMA foreign_keys`), so SQLite does what the
+English says (`delete_event` and `delete_section` checks prove both). To
+answer a clean failure case instead of HTTP 500 for RESTRICT, delete the
+grandchildren first, or count them in an earlier step of a table the delete
+does not write.
+
+The fixture schema: `sections.event_id ... REFERENCES events (id) ON DELETE
+CASCADE` and `section_seats.section_id ... REFERENCES sections (id) ON
+DELETE RESTRICT`. English (`adapter/testdata/good/delete_event/delete_event.en`):
+```
+1. Delete: remove one event from table `events` whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `DeleteOwnEvent` in queries/delete_own_event.sql). The condition is checked by the same statement that deletes, never by an earlier read: if there is no such event, nothing is deleted. Each section whose `event_id` is the `id` of a deleted event is deleted with it (ON DELETE CASCADE in schema.sql). While a section seat has `section_id` equal to the `id` of a section being deleted, schema.sql refuses the delete (ON DELETE RESTRICT): the query fails and nothing is deleted. Ownership: only events you own (`organizer_id` is the signed-in user) can be deleted by this step. If the query fails, stop with HTTP 500 Internal Server Error.
+2. If not exactly one event was deleted in step 1, stop with F1: HTTP 404 Not Found "no such event of yours".
+   Nothing was written in step 1, so there is nothing to roll back.
+```
+Over a Q7 list (`TestDeleteEnglish`): ``Delete: remove each section from table `sections` whose ... and `id` is one of the request's `section_ids` at that moment (...). ... a section that does not match is not deleted.`` and ``If the number of sections deleted in step 1 is not the number of sections in the request's `section_ids`, stop with F1 ...``.
+
+Refused (`adapter/testdata/bad/delete_shapes`):
+- `DELETE FROM sections;` - `queries/delete.sql:3:21: refused: DELETE without WHERE is not in the allowed pattern list (query DeleteEverySection). A DELETE without WHERE removes every row of sections. A Q10 delete names its rows by the table's key: DELETE FROM sections WHERE <key> = sqlc.arg(<key>) [AND <col> = <value>]... (or <key> IN (sqlc.slice(<name>)), Q7)`
+- `WHERE name = sqlc.arg(name)` - `queries/delete.sql:5:1: refused: delete from table sections (query DeleteByName) whose WHERE does not name its rows by the key id is not in the allowed pattern list (Q10 delete). A Q10 delete removes rows by their key, never by another column (which could match any number of rows): DELETE FROM sections WHERE id = sqlc.arg(id) [AND <col> = <value>]... (or id IN (sqlc.slice(<name>)), Q7), then if <n> != 1 { return Output{}, F<n> } (S10)`
+- `AND capacity < sqlc.arg(capacity)` - `queries/delete.sql:11:50: refused: comparison capacity < sqlc.arg(capacity) in a delete is not in the allowed pattern list (query DeleteSmallSections). ...`
+- `WHERE id = sqlc.arg(id) OR name = sqlc.arg(name)` - `queries/delete.sql:15:46: refused: OR in WHERE ...`
+- `... RETURNING name` - `queries/delete.sql:19:46: refused: RETURNING on a DELETE is not in the allowed pattern list (query DeleteSectionReturning). Expected end of query (a Q10 delete gives back only the number of rows it removed: annotate :execrows, no RETURNING, and check the count with != 1, S10) ...`
+- `DELETE FROM customers ...` while `invoices.customer_id INTEGER NOT NULL REFERENCES customers (id)` - `queries/delete.sql:21:1: refused: delete from table customers (query DeleteCustomer) while invoices.customer_id references customers without ON DELETE (schema.sql:11:35) is not in the allowed pattern list (Q10 delete). A delete says what happens to the rows that point at a deleted row: declare ON DELETE CASCADE (they are deleted with it, and the English says so) or ON DELETE RESTRICT (the delete fails while one exists: the query fails and nothing is deleted) on customer_id REFERENCES customers (id) in schema.sql. ...`
+- other forms (`TestSQLShapes`, `TestDeleteSchema`): `:one` - `refused: query annotation :one on a delete ...`; `(id = ? OR ...)` - `refused: parenthesised condition in a delete ...`; a literal only - `refused: delete with no <key> = <parameter> condition ...`; a table without a single-column key - `refused: delete from table tags (query D), which schema.sql does not give a single-column PRIMARY KEY ...`; `ON DELETE SET NULL` / `NO ACTION` - `... with ON DELETE SET NULL ...`; a foreign key reached through a cascade - `refused: delete from table a (query D), which deletes rows of b with it (ON DELETE CASCADE), while c.b_id references b without ON DELETE ...`; `LIMIT`, a subquery other than the proof - `refused: LIMIT`, `refused: subquery`
+
 ---
 
 ## Rules across statements: T1-T4, W1
@@ -1187,8 +1276,9 @@ HTTP 400 `{"error": {"id": "bad_request", "message": "query parameter \"offset\"
 
 ### W1
 
-**no check-then-write** - a Q3 or Q6 write to a table that an earlier Q1, Q2
-or Q5 query of the same action read is refused. Reading and then writing lets
+**no check-then-write** - a Q3, Q6, Q8 or Q10 write to a table that an earlier
+Q1, Q2 or Q5 query of the same action read is refused (a Q10 delete also
+writes every table its ON DELETE CASCADE reaches). Reading and then writing lets
 another call change the row in between; put the condition into the write
 (Q6) and check the count (S10). Reading **after** a claim, to explain why it
 changed nothing, is allowed.
@@ -1374,13 +1464,16 @@ writes an owned table only in the signed-in user's name:
 - a Q6 UPDATE (claim) has `<owner col> = sqlc.arg(<p>)` as an AND
   condition of its `WHERE` (not inside an OR group) and does not `SET` the
   owner column to anything else (no giving a row away);
+- a Q10 DELETE has `<owner col> = sqlc.arg(<p>)` as an AND condition of
+  its `WHERE` (`DELETE FROM events WHERE id = sqlc.arg(id) AND organizer_id
+  = sqlc.arg(organizer_id)`, `delete_event`);
 - a Q3 INSERT sets `<owner col> = sqlc.arg(<p>)`;
 - for `<p>` the action passes exactly its signed-in user, the Input field
   tagged `server:"user"` (`OrganizerID: in.User`), whose type is the
   column's. A request field (`organizer_id` the caller sends), a literal,
   a let or a missing condition is refused;
-- a `Public` action never writes an owned table (signed out, its user is 0
-  or the empty text, which owns nothing).
+- a `Public` action never writes or deletes an owned table (signed out,
+  its user is 0 or the empty text, which owns nothing).
 
 An action whose `Roles` lists **only** roles with the bypass (here
 `httpx.Roles("admin")`) may write any row.
@@ -1416,7 +1509,12 @@ and, for the other steps on an owned table:
 | insert setting the owner to the user (`create_event.en`) | `` Ownership: the new event is yours (`organizer_id` is the signed-in user). `` |
 | read limited to the user (`my_events.en`) | `` Ownership: only events you own (`organizer_id` is the signed-in user) are read. `` |
 | read not limited to the user | `` Ownership: this read is not limited to events you own (`organizer_id` is not compared with the signed-in user). `` |
+| delete limited to the user (`delete_event.en`) | `` Ownership: only events you own (`organizer_id` is the signed-in user) can be deleted by this step. `` |
 | write by an admin-only action (`admin_rename_event.en`) | `` Ownership: this step is not limited to events you own (`organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. `` |
+
+The checks of `delete_event` prove a delete the same way: organizer B
+deleting A's event gets F1 (HTTP 404) and nothing is deleted; A deletes
+it, and its sections go with it (ON DELETE CASCADE).
 
 The checks of `rename_event` prove it over HTTP against SQLite: organizer B
 renaming organizer A's event gets F2 (HTTP 404) and nothing is written,
@@ -1439,6 +1537,11 @@ roles that bypass ownership):
   `schema.sql:25:1: refused: owner annotation "-- owner: id, author" ...`;
   `schema.sql:31:1: refused: owner annotation "-- owner: author" that is not attached to a CREATE TABLE ...`;
   and a user field of another type than the owner column - `testdata/bad/owner_annotation/action.go:17:2: refused: signed-in user field User of type int64 for table notes, whose owner column author is TEXT (schema.sql:11:1) is not in the allowed pattern list (A4 ownership). The signed-in user is compared with the owner column, so they have the same type: User string \`json:"user" server:"user"\` for a TEXT owner column (or change the column's type in schema.sql)`
+- a DELETE by id alone, from an action an organizer may call (`adapter/testdata/bad/delete_owned_unscoped`) -
+  `testdata/bad/delete_owned_unscoped/action.go:36:2: refused: delete from owned table events (query DeleteEvent) whose WHERE does not limit it to rows the signed-in user owns (organizer_id = the signed-in user) is not in the allowed pattern list (A4 ownership). Table events is owned by organizer_id (schema.sql:42:1), so an action that a role without the ownership bypass may call writes only rows the signed-in user owns: ... a DELETE has it as an AND condition of its WHERE ...`
+- a DELETE in a `Public` action, even with the owner condition (`adapter/testdata/bad/delete_public`) -
+  `testdata/bad/delete_public/action.go:47:2: refused: delete from owned table events (query DeleteOwnEvent) in a Public action is not in the allowed pattern list (A4 ownership). ...`;
+  the owner from a request field or a literal (`TestDeleteRefusals`) - `` refused: delete from owned table events (query DeleteOwnEvent) whose owner column organizer_id is the request's `event_id`, which is not the signed-in user ... ``
 - other forms (`TestOwnershipRefusals`): a `Public` action - `refused: write to owned table events (query RenameOwnEvent) in a Public action ...`;
   no `server:"user"` field - `refused: write to owned table events (query RenameOwnEvent) in an action without the signed-in user ...`;
   the owner condition only inside an OR group, or `organizer_id = 7` - `... whose WHERE does not limit it ...`, `... whose owner column organizer_id is 7, which is not the signed-in user ...`;
@@ -1490,15 +1593,19 @@ statement that writes**:
 - an UPDATE (Q6 claim) has the Q9 proof subquery as an AND condition of its
   `WHERE`, and never sets `<fk>` (moving a row to another parent, which
   nothing proves is the caller's, is refused);
+- a DELETE (Q10) has the Q9 proof subquery as an AND condition of its
+  `WHERE` (`delete_section`); with no such row, or another user's, nothing
+  is deleted and the S10 guard is the failure (HTTP 404 in the fixture);
 - the signed-in user is bound to the innermost owner column (`OrganizerID:
   in.User`); a request field, a literal, a copy of the owner column on the
   child row (`sections.organizer_id = sqlc.arg(...)`) or no proof is
   refused. A copied owner column proves nothing: the row's `event_id` still
   comes from the request;
-- a `Public` action never writes a child table.
+- a `Public` action never writes or deletes a child table.
 
 An action whose `Roles` lists only bypass roles may write any row
-(`admin_rename_section`, a plain Q6 by id). Reads are not refused, as in A4;
+(`admin_rename_section`, a plain Q6 by id; `admin_delete_section`, a
+plain Q10 by id). Reads are not refused, as in A4;
 the English of every read says whether it is limited to the caller's rows.
 
 English, in place of the A4 sentences (`events.organizer_id` is the root's
@@ -1510,12 +1617,19 @@ owner column, `sections of events` the chain):
 | Q6 claim with a Q9 proof (`rename_section.en`) | `` Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) can be changed by this step. `` |
 | read with a Q9 proof (`my_events.en`) | `` Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) are read. `` |
 | read without it (`event_summary.en`, a Public action) | `` Ownership: this read is not limited to sections of events you own (`events.organizer_id` is not compared with the signed-in user). `` |
+| Q10 delete with a Q9 proof (`delete_section.en`) | `` Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) can be deleted by this step. `` |
+| delete by an admin-only action (`admin_delete_section.en`) | `` Ownership: this step is not limited to sections of events you own (`events.organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. `` |
 | write by an admin-only action (`admin_rename_section.en`) | `` Ownership: this step is not limited to sections of events you own (`events.organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. `` |
 
 The checks of `add_section` prove it over HTTP against SQLite: organizer B
 adding a section to A's event gets F3 (HTTP 404) and the sections table is
 unchanged; A adds it. The checks of `rename_section` do the same for a
-rename, and `admin_rename_section` renames anyone's section.
+rename, and `admin_rename_section` renames anyone's section. The checks of
+`delete_section` prove a delete: organizer B deleting a section of A's
+event gets F1 (HTTP 404) and nothing is deleted, also when B sends A's id
+as `user` (HTTP 400); A deletes it; a section with seats is not deleted
+(ON DELETE RESTRICT: HTTP 500, nothing deleted); `admin_delete_section`
+deletes anyone's section.
 
 Refused (`file:line:col`, each with the fix: the Q8 or Q9 shape for this
 table, written out, and `in.User`, or roles that bypass ownership):
@@ -1536,6 +1650,13 @@ table, written out, and `in.User`, or roles that bypass ownership):
   `schema.sql:63:1: refused: parent table loop_b, whose own owner annotation is refused ...`;
   `schema.sql:69:1: refused: chain of owners that comes back to table loop_a (loop_a -> loop_b -> loop_a) ...`;
   `schema.sql:76:1: refused: owner annotation "-- owner: event_id -> events" is not in the allowed pattern list (A4 ownership) ...`
+- a DELETE by id alone (`adapter/testdata/bad/delete_child_unscoped`) -
+  `testdata/bad/delete_child_unscoped/action.go:36:2: refused: delete from table sections (query DeleteSection), which inherits its owner from events, whose WHERE does not prove the event is the signed-in user's is not in the allowed pattern list (A5 inherited ownership). Table sections inherits its owner from events through event_id (schema.sql:58:1), so an action that a role without the ownership bypass may call proves, in the statement that writes, that the events row is the signed-in user's: sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id)). ... a DELETE has the same proof in its WHERE. ...`
+- a DELETE that "proves" with a copied `organizer_id` (`adapter/testdata/bad/delete_copied_owner`) -
+  `testdata/bad/delete_copied_owner/action.go:36:2: refused: delete from table sections (query DeleteSection) that proves ownership with its own copy of organizer_id, which proves nothing: sections inherits its owner from events through event_id is not in the allowed pattern list (A5 inherited ownership). ...`
+- a DELETE in a `Public` action, even with the proof (`adapter/testdata/bad/delete_public`) -
+  `testdata/bad/delete_public/action.go:40:2: refused: delete from table sections (query DeleteOwnSection), which inherits its owner from events, in a Public action is not in the allowed pattern list (A5 inherited ownership). ...`;
+  the proof bound to a request field (`TestDeleteRefusals`) - `` refused: delete from table sections (query DeleteOwnSection), which inherits its owner from events, whose proof compares events.organizer_id with the request's `section_id`, which is not the signed-in user ... ``
 - other forms (`TestInheritedRefusals`): a `Public` action - `refused: write to table sections (query ...), which inherits its owner from events, in a Public action ...`;
   no `server:"user"` field - `... in an action without the signed-in user ...`;
   the proof bound to a request field - `refused: write to table sections (query RenameOwnSection), which inherits its owner from events, whose proof compares events.organizer_id with the request's \`section_id\`, which is not the signed-in user ...`;
@@ -1740,8 +1861,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.5.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.6.0
         # with:
         #   features: "features/*/"   # default
         #   max-chars: "60000"        # default

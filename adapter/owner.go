@@ -65,17 +65,21 @@ func (w *walker) ownership(s ast.Stmt, q *SQLQuery) string {
 		}
 		w.refuse(n, construct, "A4 ownership", hint)
 	}
+	verb := "write to" // a Q10 delete says "delete from"
+	if q.Delete {
+		verb = "delete from"
+	}
 	switch {
 	case w.f.Public:
-		refuse(s, fmt.Sprintf("write to owned table %s (query %s) in a Public action", q.Table, q.Name))
+		refuse(s, fmt.Sprintf("%s owned table %s (query %s) in a Public action", verb, q.Table, q.Name))
 	case user == nil:
-		refuse(s, fmt.Sprintf("write to owned table %s (query %s) in an action without the signed-in user", q.Table, q.Name))
+		refuse(s, fmt.Sprintf("%s owned table %s (query %s) in an action without the signed-in user", verb, q.Table, q.Name))
 	case other != "":
-		refuse(otherAt, fmt.Sprintf("write to owned table %s (query %s) whose owner column %s is %s, which is not the signed-in user", q.Table, q.Name, o.Col, other))
+		refuse(otherAt, fmt.Sprintf("%s owned table %s (query %s) whose owner column %s is %s, which is not the signed-in user", verb, q.Table, q.Name, o.Col, other))
 	case !scoped && q.Shape == "insert":
 		refuse(s, fmt.Sprintf("insert into owned table %s (query %s) that does not set its owner column %s to the signed-in user", q.Table, q.Name, o.Col))
 	case !scoped:
-		refuse(s, fmt.Sprintf("write to owned table %s (query %s) whose WHERE does not limit it to rows the signed-in user owns (%s = the signed-in user)", q.Table, q.Name, o.Col))
+		refuse(s, fmt.Sprintf("%s owned table %s (query %s) whose WHERE does not limit it to rows the signed-in user owns (%s = the signed-in user)", verb, q.Table, q.Name, o.Col))
 	}
 	if q.Shape == "claim" {
 		for _, v := range q.Values {
@@ -91,6 +95,9 @@ func (w *walker) ownership(s ast.Stmt, q *SQLQuery) string {
 func (w *walker) ownedWrite(q *SQLQuery, rows, row, col string) string {
 	if q.Shape == "insert" {
 		return fmt.Sprintf(t("owned insert"), row, col)
+	}
+	if q.Delete {
+		return fmt.Sprintf(t("owned delete"), rows, col)
 	}
 	return fmt.Sprintf(t("owned update"), rows, col)
 }
@@ -192,8 +199,8 @@ func (w *walker) isUserInput(e ast.Expr) bool {
 // {col}, {at} (the annotation in schema.sql), {param} (sqlc's Go name of it) and {type} (the column's Go
 // type) are filled in.
 const ownerWriteHint = "Table {table} is owned by {col} ({at}), so an action that a role without the ownership bypass may call writes only rows the signed-in user owns: " +
-	"an UPDATE has {col} = sqlc.arg({col}) as an AND condition of its WHERE (not inside an OR group) and sets {col} to nothing else, and an INSERT sets {col} = sqlc.arg({col}); " +
-	"the action passes exactly the signed-in user for it (User {type} `json:\"user\" server:\"user\"`, then {param}: in.User). A request field never counts, and a Public action never writes an owned table. " +
+	"an UPDATE has {col} = sqlc.arg({col}) as an AND condition of its WHERE (not inside an OR group) and sets {col} to nothing else, a DELETE has it as an AND condition of its WHERE, and an INSERT sets {col} = sqlc.arg({col}); " +
+	"the action passes exactly the signed-in user for it (User {type} `json:\"user\" server:\"user\"`, then {param}: in.User). A request field never counts, and a Public action never writes or deletes an owned table. " +
 	"If only administrators may do this, declare Roles with roles that bypass ownership (in cmd/server: httpx.AppRoles(...).BypassOwnership(\"admin\"))"
 
 // sqlcField is the Go field name sqlc gives parameter p in <Query>Params
