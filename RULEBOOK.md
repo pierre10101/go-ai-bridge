@@ -28,9 +28,9 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Declarations: D1-D10](#declarations-d1-d10)
 - [Statements: S1-S11](#statements-s1-s11)
 - [Expressions: E1-E7](#expressions-e1-e7)
-- [SQL: Q0-Q7](#sql-q0-q7)
+- [SQL: Q0-Q9](#sql-q0-q9)
 - [Rules across statements: T1-T4, W1](#rules-across-statements-t1-t4-w1)
-- [Who may call it: A1-A4](#who-may-call-it-a1-a4)
+- [Who may call it: A1-A5](#who-may-call-it-a1-a5)
 - [Outside the slice: M1-M3, H1](#outside-the-slice-m1-m3-h1)
 - [Conditional claim and state-transition rules](#conditional-claim-and-state-transition-rules)
 - [Hard limits](#hard-limits)
@@ -50,11 +50,11 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.4.0
+go get github.com/pierre10101/go-ai-bridge@v0.5.0
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.4.0
-bridge-en -version                      # bridge-en 0.4.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.5.0
+bridge-en -version                      # bridge-en 0.5.0
 ```
 
 Then `bridge-en init` writes `AGENTS.md` and pointer files for AI agents
@@ -64,7 +64,7 @@ into the app (documents only; see
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.4.0
+require github.com/pierre10101/go-ai-bridge v0.5.0
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -75,9 +75,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -98,12 +98,19 @@ and the app runs that same runtime: both come from the one module version in
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.4.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.4.0), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.5.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.5.0), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
-diff of every `.en` file, commit. 0.4.0 is a breaking change: a table can
+diff of every `.en` file, commit. 0.5.0 is a breaking change: a table
+whose rows belong to rows of an owned table names its parent
+(`-- owner: <fk> -> <parent>.<pcol>`, A5), and then every write to it from
+an action a non-admin role may call proves, in the statement that writes,
+that the parent row is the signed-in user's (a Q8 insert from a parent row
+or a Q9 proof subquery); a statement with a subquery or an insert from a
+parent row names every column with its table; the migration steps are in
+README.md, "0.4.x to 0.5.0". 0.4.0 was one too: a table can
 declare its owner (`-- owner: <col>` in `schema.sql`) and then every write
 to it from an action a non-admin role may call is limited to the signed-in
 user's rows (A4), and a GET that sends a query parameter it does not declare
@@ -141,7 +148,7 @@ A slice:
 features/<slice>/
   intent.md          why, inputs, outputs, "## Failure cases" F1..Fn (I1-I3; write this FIRST)
   action.go          Route, Roles, Input, Output, F-IDs, Action, New, Handle (D1-D10, S1-S11, A1)
-  queries/*.sql      plain SQL with sqlc annotations (Q0-Q7)
+  queries/*.sql      plain SQL with sqlc annotations (Q0-Q9)
   db/                sqlc-generated code (never edited by hand)
   checks/*_test.go   one TestF<n>_... per F-ID, referencing <slice>.F<n>
   <slice>.en         golden English (bridge-en -write), reviewed in the pull request
@@ -163,7 +170,7 @@ Sign-in, password hashing and sessions are the app's own code, outside
 
 1. Write `intent.md` with every failure case (F1..Fn) in English **before any
    code**, in the I2 format: `- F<n>: <text>` under `## Failure cases`.
-2. Write `queries/*.sql` (Q0-Q7) and run `sqlc generate`.
+2. Write `queries/*.sql` (Q0-Q9) and run `sqlc generate`.
 3. Write `action.go` inside D1-D10 / S1-S11, declaring who may call it
    (`var Roles = httpx.Roles("<role>", ...)` or `httpx.Public`, A1).
 4. Write one check per F-ID in `checks/` (`func TestF<n>_...` that references
@@ -522,7 +529,8 @@ Refused: `page.NextAfter(rows, "seq", in.After)` - ``refused: page.NextAfter lim
 
 ### S10
 
-**claim check** - after a Q6 claim `n, err := a.q.<Claim>(...)`, an S2 guard
+**claim check** - after a Q6 claim (or a Q8 insert from a parent row, A5)
+`n, err := a.q.<Claim>(...)`, an S2 guard
 whose **entire condition** is `n != 1`, `if n != 1 { return Output{}, F<n> }`,
 before the success return. `n` is compared only as `!= 1`, `== 1` or `== 0`.
 The same test inside a compound condition (`&&`, `||`, `!`) does not count:
@@ -552,6 +560,7 @@ says, for each earlier write:
 | an insert (Q3) before it; or a claim, after a guard that stops unless exactly one row changed (`!= 1`), unless one row per entry of its list changed (S11, `!= int64(len(in.<List>))`) or unless one did (`== 0`) | `The write in step 2 is rolled back.` |
 | a claim whose count is not known yet: a read right after it, or the `!= 1` (or S11) guard itself (0 rows, or several) | `Any change made in step 2 is rolled back.` |
 | a guard whose condition includes `<n> == 0` (`claimed == 0 && ...`): it stops only when the claim changed nothing | `Nothing was written in step 2, so there is nothing to roll back.` |
+| the `!= 1` guard of a Q8 insert from a parent row: it names its parent by the parent's key, so it adds one row or none (`add_section.en`: ``4. If not exactly one section was added in step 3, stop with F3: ...``) | `Nothing was written in step 3, so there is nothing to roll back.` |
 
 The failure index says the same per F-ID: `before any write`, `after a write
 that changed nothing, so nothing was written`, `after a write that may have
@@ -690,7 +699,7 @@ Refused: `struct{ X int }{1}` or a closure - `refused: function literal (closure
 
 ---
 
-## SQL: Q0-Q7
+## SQL: Q0-Q9
 
 `queries/*.sql`, read by a strict shape parser. Anything outside a shape is
 refused at `file:line:col`.
@@ -698,7 +707,7 @@ refused at `file:line:col`.
 ### Q0
 
 **query** - `-- name: <Query> :one|:many|:execrows`, then exactly one
-statement. `:one` is Q1-Q3, `:many` only Q5, `:execrows` only Q6.
+statement. `:one` is Q1-Q3, `:many` only Q5, `:execrows` only Q6 or Q8.
 
 Refused: `:many` on a non-page select - `refused: query annotation :many on a non-page shape is not in the allowed pattern list (Q0 query annotation)`
 
@@ -897,6 +906,92 @@ Refused (`adapter/testdata/bad/list_shapes`):
 - `a.q.CountTickets(ctx, in.Scalar)` - `refused: value in.Scalar for IN (sqlc.slice(ids)) that is not a list input is not in the allowed pattern list (Q7 IN list). ...`
 - `... id IN (sqlc.slice(ids)) AND expires_at <= sqlc.arg(now)` in a read (`adapter/testdata/bad/read_clock_position`) - `refused: parameter now after IN (sqlc.slice(ids)) is not in the allowed pattern list (query CountAfterList). ...`
 
+### Q8
+
+**insert from a parent row** - the only INSERT into a child table (A5) that
+proves its parent is the signed-in user's, from an action a role without
+the ownership bypass may call:
+
+```sql
+-- name: AddSection :execrows
+INSERT INTO sections (event_id, name, capacity)
+SELECT events.id, sqlc.arg(name), sqlc.arg(capacity)
+FROM events
+WHERE events.id = sqlc.arg(event_id) AND events.organizer_id = sqlc.arg(organizer_id);
+```
+```go
+added, err := a.q.AddSection(ctx, db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID, OrganizerID: in.User})
+if err != nil {
+	return Output{}, err
+}
+if added != 1 {
+	return Output{}, F3 // 404 "no such event of yours"
+}
+```
+
+- `INSERT INTO <child> (<fk>, <col>, ...) SELECT <parent>.<key>, <value>, ... FROM <parent> WHERE <parent>.<key> = <value> AND <proof>`;
+- the first column is the child's parent column `<fk>` and its value
+  `<parent>.<key>`, the parent's single-column `PRIMARY KEY`; the other
+  values are Q4 values (parameters or literals), never a column of the parent
+  (copying its owner column onto the child proves nothing);
+- the `WHERE` is exactly the parent row named by its key and the A5 proof:
+  `<parent>.<owner> = sqlc.arg(<p>)` bound to `in.User` when the parent owns
+  its rows directly, or the parent's own Q9 subquery when it is a child too;
+- every column has its table (`events.id`; sqlc reports an unqualified one as
+  ambiguous); the `INSERT` column list stays plain;
+- `:execrows`, no `RETURNING`; it adds one row or none, so the S10 guard
+  `if added != 1` is the failure "no such parent of yours": there is no
+  earlier read (W1), and nothing is written.
+
+English (`adapter/testdata/good/add_section/add_section.en`):
+```
+3. Claim: add one section to table `sections` with `event_id` = the event's `id`, `name` = the request's `name` and `capacity` = the request's `capacity`, only if there is an event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `AddSection` in queries/add_section.sql). The condition is checked by the same statement that writes, never by an earlier read: if there is no such event, no section is added. Ownership: the new section is added only to an event you own (`events.organizer_id` is the signed-in user); for any other event nothing is written. If the query fails, stop with HTTP 500 Internal Server Error.
+4. If not exactly one section was added in step 3, stop with F3: HTTP 404 Not Found "no such event of yours".
+   Nothing was written in step 3, so there is nothing to roll back.
+```
+
+Refused:
+- `SELECT events.id, events.organizer_id, sqlc.arg(name)` (`adapter/testdata/bad/child_copied_owner`) -
+  `queries/add_section.sql:16:19: refused: copy of events.organizer_id into organizer_id is not in the allowed pattern list (A5 inherited ownership). Only the parent column takes a column of the parent (its key); every other value is a parameter or a literal: ...`
+- `... RETURNING id` - `refused: RETURNING on an insert from a parent row ...`; `:one` - `refused: query annotation :one on an insert from a parent row ...`
+- an unqualified column next to a subquery or in an insert from a parent row - `refused: column id without its table in a query that reads two tables ...`
+- other forms (`TestInheritedRefusals`): the key without the proof (`WHERE events.id = sqlc.arg(event_id)`) - `refused: insert from a row of events whose WHERE does not name it by events.id = <parameter> and prove it is the signed-in user's ...`; any other condition on the parent - `refused: condition on events.title in an insert from a parent row ...`; `SELECT sqlc.arg(event_id), ...` - `add_section.sql:5:8: refused: value of the parent column event_id that is not events.id ...`
+- into a table without an inherited owner - `refused: insert from a row of events into table events, which does not inherit its owner ...`
+
+### Q9
+
+**proof subquery** - the condition that proves a child row's parent is the
+signed-in user's, one AND condition of a Q1, Q2, Q5 or Q6 `WHERE` on a child
+table (A5), never inside an OR group:
+
+```sql
+-- name: RenameOwnSection :execrows
+UPDATE sections
+SET name = sqlc.arg(name)
+WHERE sections.id = sqlc.arg(id)
+  AND sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id));
+```
+
+- `<child>.<fk> IN (SELECT <parent>.<key> FROM <parent> WHERE <proof>)`,
+  where `<parent>.<key>` is the key `<fk>` holds;
+- `<proof>` is `<parent>.<owner> = sqlc.arg(<p>)`, the action passing
+  `in.User` for `<p>`, when the parent owns its rows directly (A4), or the
+  parent's own Q9 when it inherits too: one nested subquery per level of a
+  chain (`prices.section_id IN (SELECT sections.id FROM sections WHERE sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id)))`);
+- every column of the statement has its table; `SET` columns stay plain.
+
+English (`adapter/testdata/good/rename_section/rename_section.en`, and the
+read in `my_events.en`):
+```
+2. Claim: in table `sections`, set `name` = the request's `name` on each section whose `id` is the request's `section_id` and `event_id` is the `id` of an event whose `organizer_id` is the signed-in user at that moment (...). ... Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) can be changed by this step. ...
+2. Read: count the sections whose `event_id` is the `id` of an event whose `organizer_id` is the signed-in user (query `CountMySections` in queries/count_sections.sql). Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) are read. ...
+```
+
+Refused:
+- a subquery on a table that does not inherit its owner (`adapter/testdata/bad/child_annotation`) -
+  `queries/count_sections.sql:5:7: refused: subquery on sections.event_id, but table sections does not inherit its owner is not in the allowed pattern list (A5 inherited ownership). A Q9 subquery is only the proof that a child row's parent is the signed-in user's ...`
+- other forms (`TestInheritedRefusals`): inside an OR group - `refused: subquery inside an OR group ...`; a second condition in the subquery - `refused: subquery on events with 2 conditions ...`; the wrong key - `refused: subquery sections.event_id IN (SELECT events.organizer_id ...), but sections.event_id holds the key events.id ...`; a proof one level short in a chain - `refused: condition on sections.event_id where the proof is sections.event_id IN (SELECT events.id FROM events ...) ...`
+
 ---
 
 ## Rules across statements: T1-T4, W1
@@ -1040,7 +1135,7 @@ The action also takes these 3 values, which the caller does not send:
 - `user`: set by the server: the signed-in user (from the app's sign-in session); the caller does not send it, and a request that does is answered with HTTP 400 below.
 - `role`: set by the server: the signed-in user's role (from the app's sign-in session); the caller does not send it, and a request that does is answered with HTTP 400 below.
 ```
-For a `Public` action (`adapter/testdata/good/my_events/my_events.en`,
+For a `Public` action (`adapter/testdata/good/event_summary/event_summary.en`,
 `httpx.SignedOutRule`): `` `user`: set by the server: the signed-in user
 (from the app's sign-in session), or 0 when the caller is not signed in; ...``
 In steps they are `the signed-in user` and `the signed-in user's role`:
@@ -1119,11 +1214,12 @@ English: ``If no seat was changed in step 2 and the found seat's `held_by` equal
 
 ---
 
-## Who may call it: A1-A4
+## Who may call it: A1-A5
 
 Every action says who may call it, and the runtime enforces it **before**
 `Handle` runs (A1-A3); which rows it may change in a table that belongs to
-its users is declared in `schema.sql` and enforced by `-check` (A4). There is no default: an action that says nothing is refused
+its users (A4), or to rows of such a table (A5), is declared in
+`schema.sql` and enforced by `-check`. There is no default: an action that says nothing is refused
 (deny by default). Sign-in itself (passwords, sessions) is the app's; the
 app tells the runtime who is signed in through one hook.
 
@@ -1150,7 +1246,7 @@ Who may call it: signed-in users with role `organizer` or `admin`. Anyone else i
 - HTTP 401 Unauthorized, id "unauthorized", message "sign-in required", if the caller is not signed in. The action does not run.
 - HTTP 403 Forbidden, id "forbidden", message "not allowed for this role", if the caller is signed in with a role not listed above. The action does not run.
 ```
-or (`httpx.PublicRule`, `adapter/testdata/good/my_events/my_events.en`):
+or (`httpx.PublicRule`, `adapter/testdata/good/event_summary/event_summary.en`):
 ```
 Who may call it: anyone, signed in or not.
 ```
@@ -1352,6 +1448,99 @@ roles that bypass ownership):
   a role twice, no role, a non-literal - `refused: ownership-bypass role "admin" listed twice ...`, `refused: BypassOwnership without roles ...`, `refused: ownership-bypass role admin that is not a string literal ...`;
   not chained on the `httpx.AppRoles(...)` call (`AppRoles.BypassOwnership("admin")` later, or twice) - `refused: AppRoles.BypassOwnership that is not chained on the httpx.AppRoles call ...`
 
+### A5
+
+**inherited ownership** - a table whose rows belong to rows of an owned
+table (a child: the sections of an event) has no owner column of its own. It
+names its parent instead, attached to its `CREATE TABLE` like A4:
+
+```sql
+-- owner: event_id -> events.organizer_id
+CREATE TABLE IF NOT EXISTS sections (
+    id       INTEGER PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES events (id),
+    name     TEXT    NOT NULL,
+    capacity INTEGER NOT NULL CHECK (capacity > 0)
+);
+```
+
+`-- owner: <fk> -> <parent>.<pcol>`: `<fk>` is one of the child's columns and
+holds the parent's single-column `PRIMARY KEY` (same type); `<parent>` is
+another table with its own valid `-- owner:` annotation, and `<pcol>` is the
+column that annotation names. Repeating it means a reviewer reads, on the
+child, whose rows it ends at.
+
+**Chains** are supported: a parent may itself be a child
+(`-- owner: section_id -> sections.event_id` on `prices`), to any depth,
+ending at a directly owned table whose owner column has the signed-in
+user's type. Why: the proof is plain SQL that nests (one Q9 subquery per
+level, each checked against the annotation of its own table), so a deeper
+chain needs no new shape and no trust in anything but the statement that
+writes; the English names the whole chain ("prices of sections of events")
+and the root column. A cycle, or a chain through a refused annotation, is
+refused.
+
+**The rule.** An action that is `Public`, or whose `Roles` lists a role
+without the A4 bypass, writes a child table only with the proof **in the
+statement that writes**:
+
+- an INSERT is a Q8 insert from the caller's parent row: no such row (or
+  another user's) inserts nothing, and the S10 guard `if <n> != 1` is the
+  failure (HTTP 404 in the fixture), so organizer B cannot add to A's event;
+- an UPDATE (Q6 claim) has the Q9 proof subquery as an AND condition of its
+  `WHERE`, and never sets `<fk>` (moving a row to another parent, which
+  nothing proves is the caller's, is refused);
+- the signed-in user is bound to the innermost owner column (`OrganizerID:
+  in.User`); a request field, a literal, a copy of the owner column on the
+  child row (`sections.organizer_id = sqlc.arg(...)`) or no proof is
+  refused. A copied owner column proves nothing: the row's `event_id` still
+  comes from the request;
+- a `Public` action never writes a child table.
+
+An action whose `Roles` lists only bypass roles may write any row
+(`admin_rename_section`, a plain Q6 by id). Reads are not refused, as in A4;
+the English of every read says whether it is limited to the caller's rows.
+
+English, in place of the A4 sentences (`events.organizer_id` is the root's
+owner column, `sections of events` the chain):
+
+| Step | English |
+|---|---|
+| Q8 insert (`add_section.en`) | `` Ownership: the new section is added only to an event you own (`events.organizer_id` is the signed-in user); for any other event nothing is written. `` |
+| Q6 claim with a Q9 proof (`rename_section.en`) | `` Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) can be changed by this step. `` |
+| read with a Q9 proof (`my_events.en`) | `` Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) are read. `` |
+| read without it (`event_summary.en`, a Public action) | `` Ownership: this read is not limited to sections of events you own (`events.organizer_id` is not compared with the signed-in user). `` |
+| write by an admin-only action (`admin_rename_section.en`) | `` Ownership: this step is not limited to sections of events you own (`events.organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. `` |
+
+The checks of `add_section` prove it over HTTP against SQLite: organizer B
+adding a section to A's event gets F3 (HTTP 404) and the sections table is
+unchanged; A adds it. The checks of `rename_section` do the same for a
+rename, and `admin_rename_section` renames anyone's section.
+
+Refused (`file:line:col`, each with the fix: the Q8 or Q9 shape for this
+table, written out, and `in.User`, or roles that bypass ownership):
+- an insert with `VALUES` and an update by id only (`adapter/testdata/bad/child_unscoped_insert`) -
+  `testdata/bad/child_unscoped_insert/action.go:40:2: refused: insert into table sections (query AddSection), which inherits its owner from events, that does not prove the event is the signed-in user's is not in the allowed pattern list (A5 inherited ownership). Table sections inherits its owner from events through event_id (schema.sql:57:1), so an action that a role without the ownership bypass may call proves, in the statement that writes, that the events row is the signed-in user's: INSERT INTO sections (event_id, <col>, ...) SELECT events.id, <value>, ... FROM events WHERE events.id = sqlc.arg(event_id) AND events.organizer_id = sqlc.arg(organizer_id) (:execrows, then if <n> != 1 { return Output{}, F<n> }, S10). The action passes exactly the signed-in user for sqlc.arg(organizer_id) (User int64 \`json:"user" server:"user"\`, then OrganizerID: in.User). A copy of organizer_id on the sections row, a request field or a Public action never counts, and a claim never changes event_id. If only administrators may do this, declare Roles with roles that bypass ownership (in cmd/server: httpx.AppRoles(...).BypassOwnership("admin"))` and
+  `testdata/bad/child_unscoped_insert/action.go:44:2: refused: write to table sections (query RenameSection), which inherits its owner from events, whose WHERE does not prove the event is the signed-in user's ... sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id)) ...`
+- proving with a copied `organizer_id` (`adapter/testdata/bad/child_copied_owner`) -
+  `testdata/bad/child_copied_owner/action.go:39:2: refused: write to table sections (query AddSection) that proves ownership with its own copy of organizer_id, which proves nothing: sections inherits its owner from events through event_id is not in the allowed pattern list (A5 inherited ownership). ...` (the same for an UPDATE whose WHERE compares the copy, `action.go:43:2`)
+- an update that changes the parent column (`adapter/testdata/bad/child_moves_parent`) -
+  `testdata/bad/child_moves_parent/action.go:40:2: refused: change of the parent column event_id of table sections (query MoveSection), which inherits its owner from events is not in the allowed pattern list (A5 inherited ownership). ...`
+- the annotation itself (`adapter/testdata/bad/child_annotation`, a module of its own) -
+  `schema.sql:21:1: refused: parent column evnt_id, which table sections does not declare (its columns: id, event_id) is not in the allowed pattern list (A5 inherited ownership). ... a table whose rows belong to rows of another owned table (A5) names it instead: -- owner: <col> -> <parent>.<pcol>, where <col> holds the parent's single-column PRIMARY KEY (same type) and <pcol> is the column the parent's own -- owner: annotation names`;
+  `schema.sql:28:1: refused: parent table evnts, which schema.sql does not declare ...`;
+  `schema.sql:35:1: refused: parent table venues, which has no owner (no valid -- owner: annotation) ...`;
+  `schema.sql:42:1: refused: parent owner column events.id, but table events declares -- owner: organizer_id ...`;
+  `schema.sql:49:1: refused: parent column event_id of type TEXT, but the key events.id it holds is INTEGER ...`;
+  `schema.sql:56:1: refused: parent table tours without a single-column PRIMARY KEY (tour_code must hold the key of one row of it) ...`;
+  `schema.sql:63:1: refused: parent table loop_b, whose own owner annotation is refused ...`;
+  `schema.sql:69:1: refused: chain of owners that comes back to table loop_a (loop_a -> loop_b -> loop_a) ...`;
+  `schema.sql:76:1: refused: owner annotation "-- owner: event_id -> events" is not in the allowed pattern list (A4 ownership) ...`
+- other forms (`TestInheritedRefusals`): a `Public` action - `refused: write to table sections (query ...), which inherits its owner from events, in a Public action ...`;
+  no `server:"user"` field - `... in an action without the signed-in user ...`;
+  the proof bound to a request field - `refused: write to table sections (query RenameOwnSection), which inherits its owner from events, whose proof compares events.organizer_id with the request's \`section_id\`, which is not the signed-in user ...`;
+  the table itself as its parent - `refused: parent table sections that is the table itself ...`
+
 ---
 
 ## Outside the slice: M1-M3, H1
@@ -1551,8 +1740,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.4.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.5.0
         # with:
         #   features: "features/*/"   # default
         #   max-chars: "60000"        # default

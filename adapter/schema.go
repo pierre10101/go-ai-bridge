@@ -140,30 +140,54 @@ func checkClaimKeys(root string, queries map[string]*SQLQuery) (Refusals, error)
 	return errs, nil
 }
 
-// owner is one table's A4 ownership: schema.sql declares its owner column
+// owner is one table's ownership. A4: schema.sql declares its owner column
 // with the comment `-- owner: <col>` attached to its CREATE TABLE (on the
 // comment lines right above it, with no blank line in between, or at the
-// end of the CREATE TABLE line itself).
+// end of the CREATE TABLE line itself). A5: a child table names the owned
+// table its rows belong to instead, `-- owner: <col> -> <parent>.<pcol>`,
+// where <col> holds the key of a row of <parent> and <pcol> is the column
+// <parent>'s own annotation names (its owner column, or its own parent
+// column when <parent> is a child itself: a chain).
 type owner struct {
-	Table, Col string
-	GoType     string // the user field type the column takes: int64 (INTEGER) or string (TEXT)
-	pos        token.Position
+	Table string
+	Col   string // A4: the owner column; A5: the column that holds the parent's key
+	// GoType is the signed-in user field's type the chain's owner column
+	// takes: int64 (INTEGER) or string (TEXT).
+	GoType string
+	// A5 only: the parent's ownership and the parent's single-column
+	// PRIMARY KEY, which Col holds.
+	Parent    *owner
+	ParentKey string
+	pos       token.Position
+}
+
+// root is the table at the top of o's chain, owned directly (A4).
+func (o *owner) root() *owner {
+	for o.Parent != nil {
+		o = o.Parent
+	}
+	return o
 }
 
 var (
 	ownerLineRe = regexp.MustCompile(`(?i)^owner\s*:`)
-	ownerRe     = regexp.MustCompile(`^owner: ([a-z_][a-z0-9_]*)$`)
+	ownerRe     = regexp.MustCompile(`^owner: ([a-z_][a-z0-9_]*)(?: -> ([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*))?$`)
 )
 
 // ownerHint is attached to every refusal of an owner annotation.
-const ownerHint = "Declare a table's owner once, on a comment line right above its CREATE TABLE (no blank line in between): -- owner: <col>, where <col> is one of its columns of type INTEGER (an int64 signed-in user, server:\"user\") or TEXT (a string one)"
+const ownerHint = "Declare a table's owner once, on a comment line right above its CREATE TABLE (no blank line in between): -- owner: <col>, where <col> is one of its columns of type INTEGER (an int64 signed-in user, server:\"user\") or TEXT (a string one); " +
+	"a table whose rows belong to rows of another owned table (A5) names it instead: -- owner: <col> -> <parent>.<pcol>, where <col> holds the parent's single-column PRIMARY KEY (same type) and <pcol> is the column the parent's own -- owner: annotation names"
 
-// loadOwners reads A4: every `-- owner: <col>` annotation of
+// loadOwners reads A4 and A5: every `-- owner: ...` annotation of
 // <root>/schema.sql, keyed by table. A missing schema.sql gives an empty
 // map. A malformed annotation, one attached to no CREATE TABLE, a second one
 // for a table, a column the table does not declare, or a column that is
 // neither INTEGER nor TEXT is refused (with the position schema.sql:L:C) and
-// that table is not owned.
+// that table is not owned. An inherited annotation (A5) is also refused for
+// a parent table schema.sql does not declare, a parent without an owner or
+// without a single-column PRIMARY KEY, a parent column other than the one
+// the parent's annotation names, a column whose type is not the parent
+// key's, or a chain that comes back to a table on it.
 func loadOwners(root string) (map[string]*owner, Refusals, error) {
 	path := filepath.Join(root, "schema.sql")
 	src, err := os.ReadFile(path)
@@ -173,21 +197,34 @@ func loadOwners(root string) (map[string]*owner, Refusals, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	keys, err := primaryKeys(root)
+	if err != nil {
+		return nil, nil, err
+	}
 	const name = "schema.sql"
 	var errs Refusals
 	refuse := func(pos token.Position, construct string) {
 		errs = append(errs, Refusal{Pos: pos, Construct: construct, Context: "A4 ownership", Hint: ownerHint})
 	}
+	refuse5 := func(pos token.Position, construct string) {
+		errs = append(errs, Refusal{Pos: pos, Construct: construct, Context: "A5 inherited ownership", Hint: ownerHint})
+	}
 	type anno struct {
-		col string
-		pos token.Position
+		col, parent, pcol string
+		pos               token.Position
 	}
 	var pending []anno // annotations of the comment block being read
 	var toks []sqlTok
 	attached := map[int][]anno{} // index of the CREATE token -> its annotations
+	text := func(a anno) string {
+		if a.parent != "" {
+			return "-- owner: " + a.col + " -> " + a.parent + "." + a.pcol
+		}
+		return "-- owner: " + a.col
+	}
 	flushDangling := func() {
 		for _, a := range pending {
-			refuse(a.pos, "owner annotation \"-- owner: "+a.col+"\" that is not attached to a CREATE TABLE")
+			refuse(a.pos, "owner annotation \""+text(a)+"\" that is not attached to a CREATE TABLE")
 		}
 		pending = nil
 	}
@@ -204,7 +241,7 @@ func loadOwners(root string) (map[string]*owner, Refusals, error) {
 		if comment != "" && ownerLineRe.MatchString(comment) {
 			pos := token.Position{Filename: name, Line: n + 1, Column: col}
 			if m := ownerRe.FindStringSubmatch(comment); m != nil {
-				here = &anno{col: m[1], pos: pos}
+				here = &anno{col: m[1], parent: m[2], pcol: m[3], pos: pos}
 			} else {
 				refuse(pos, "owner annotation "+strconv.Quote("-- "+comment))
 			}
@@ -231,12 +268,18 @@ func loadOwners(root string) (map[string]*owner, Refusals, error) {
 		}
 	}
 	flushDangling()
-	owners := map[string]*owner{}
+	type table struct {
+		cols  map[string]string // column -> its declared type, upper case ("" if none)
+		names []string
+	}
+	tables := map[string]*table{}
+	annoOf := map[string]anno{} // table -> its (first) annotation
+	var order []string          // annotated tables, in schema order
 	for i := 0; i+2 < len(toks); i++ {
-		annos, ok := attached[i]
-		if !ok || toks[i].up != "CREATE" || toks[i+1].up != "TABLE" {
+		if toks[i].up != "CREATE" || toks[i+1].up != "TABLE" {
 			continue
 		}
+		annos := attached[i]
 		j := i + 2
 		if j+2 < len(toks) && toks[j].up == "IF" && toks[j+1].up == "NOT" && toks[j+2].up == "EXISTS" {
 			j += 3
@@ -244,10 +287,9 @@ func loadOwners(root string) (map[string]*owner, Refusals, error) {
 		if j+1 >= len(toks) || toks[j+1].up != "(" {
 			continue
 		}
-		table := strings.ToLower(toks[j].text)
+		tname := strings.ToLower(toks[j].text)
 		items, _ := tableItems(toks, j+2)
-		cols := map[string]string{} // column -> its declared type, upper case ("" if none)
-		var names []string
+		tb := &table{cols: map[string]string{}}
 		for _, it := range items {
 			if len(it) == 0 {
 				continue
@@ -260,24 +302,88 @@ func loadOwners(root string) (map[string]*owner, Refusals, error) {
 			if len(it) > 1 && (it[1].kind == "word") {
 				typ = it[1].up
 			}
-			cols[strings.ToLower(it[0].text)] = typ
-			names = append(names, strings.ToLower(it[0].text))
+			tb.cols[strings.ToLower(it[0].text)] = typ
+			tb.names = append(tb.names, strings.ToLower(it[0].text))
 		}
+		tables[tname] = tb
 		for k, a := range annos {
 			if k > 0 {
-				refuse(a.pos, fmt.Sprintf("second owner annotation for table %s (the first is at %s)", table, annos[0].pos))
+				refuse(a.pos, fmt.Sprintf("second owner annotation for table %s (the first is at %s)", tname, annos[0].pos))
 				continue
 			}
-			typ, ok := cols[a.col]
+			typ, ok := tb.cols[a.col]
 			switch {
+			case !ok && a.parent != "":
+				refuse5(a.pos, fmt.Sprintf("parent column %s, which table %s does not declare (its columns: %s)", a.col, tname, strings.Join(tb.names, ", ")))
 			case !ok:
-				refuse(a.pos, fmt.Sprintf("owner column %s, which table %s does not declare (its columns: %s)", a.col, table, strings.Join(names, ", ")))
+				refuse(a.pos, fmt.Sprintf("owner column %s, which table %s does not declare (its columns: %s)", a.col, tname, strings.Join(tb.names, ", ")))
 			case typ != "INTEGER" && typ != "TEXT":
 				refuse(a.pos, fmt.Sprintf("owner column %s of type %q, which is neither INTEGER nor TEXT", a.col, typ))
 			default:
-				owners[table] = &owner{Table: table, Col: a.col, GoType: map[string]string{"INTEGER": "int64", "TEXT": "string"}[typ], pos: a.pos}
+				annoOf[tname] = a
+				order = append(order, tname)
 			}
 		}
+	}
+	goType := map[string]string{"INTEGER": "int64", "TEXT": "string"}
+	owners := map[string]*owner{}
+	state := map[string]int{} // 1: resolving, 2: done
+	var resolve func(tname string, path []string) *owner
+	resolve = func(tname string, path []string) *owner {
+		a, ok := annoOf[tname]
+		if !ok {
+			return nil
+		}
+		switch state[tname] {
+		case 2:
+			return owners[tname]
+		case 1:
+			return nil // a cycle, refused where it closes
+		}
+		state[tname] = 1
+		defer func() { state[tname] = 2 }()
+		tb := tables[tname]
+		if a.parent == "" {
+			owners[tname] = &owner{Table: tname, Col: a.col, GoType: goType[tb.cols[a.col]], pos: a.pos}
+			return owners[tname]
+		}
+		ptb := tables[a.parent]
+		pa, pAnnotated := annoOf[a.parent]
+		switch {
+		case ptb == nil:
+			refuse5(a.pos, fmt.Sprintf("parent table %s, which schema.sql does not declare", a.parent))
+			return nil
+		case a.parent == tname:
+			refuse5(a.pos, fmt.Sprintf("parent table %s that is the table itself", a.parent))
+			return nil
+		case state[a.parent] == 1:
+			refuse5(a.pos, fmt.Sprintf("chain of owners that comes back to table %s (%s)", a.parent, strings.Join(append(append(path, tname), a.parent), " -> ")))
+			return nil
+		case !pAnnotated:
+			refuse5(a.pos, fmt.Sprintf("parent table %s, which has no owner (no valid -- owner: annotation)", a.parent))
+			return nil
+		case a.pcol != pa.col:
+			refuse5(a.pos, fmt.Sprintf("parent owner column %s.%s, but table %s declares -- owner: %s", a.parent, a.pcol, a.parent, strings.TrimPrefix(text(pa), "-- owner: ")))
+			return nil
+		case keys[a.parent] == "":
+			refuse5(a.pos, fmt.Sprintf("parent table %s without a single-column PRIMARY KEY (%s must hold the key of one row of it)", a.parent, a.col))
+			return nil
+		case tb.cols[a.col] != ptb.cols[keys[a.parent]]:
+			refuse5(a.pos, fmt.Sprintf("parent column %s of type %s, but the key %s.%s it holds is %s", a.col, tb.cols[a.col], a.parent, keys[a.parent], ptb.cols[keys[a.parent]]))
+			return nil
+		}
+		parent := resolve(a.parent, append(path, tname))
+		if parent == nil {
+			if state[a.parent] == 2 && owners[a.parent] == nil {
+				refuse5(a.pos, fmt.Sprintf("parent table %s, whose own owner annotation is refused", a.parent))
+			}
+			return nil
+		}
+		owners[tname] = &owner{Table: tname, Col: a.col, GoType: parent.GoType, Parent: parent, ParentKey: keys[a.parent], pos: a.pos}
+		return owners[tname]
+	}
+	for _, tname := range order {
+		resolve(tname, nil)
 	}
 	return owners, errs, nil
 }

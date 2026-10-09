@@ -11,6 +11,7 @@ const (
 	renameFixture      = "testdata/good/rename_event"
 	adminRenameFixture = "testdata/good/admin_rename_event"
 	myEventsFixture    = "testdata/good/my_events"
+	summaryFixture     = "testdata/good/event_summary"
 )
 
 // appWithRoutes builds a module like the fixture app in a temporary
@@ -19,6 +20,16 @@ const (
 // other roles than the fixture app's.
 func appWithRoutes(t *testing.T, routes string) string {
 	t.Helper()
+	return appWith(t, mustRead(t, "testdata/schema.sql"), routes)
+}
+
+// appWith is appWithRoutes with another schema.sql too (routes "" is the
+// fixture app's cmd/server/routes.go).
+func appWith(t *testing.T, schema, routes string) string {
+	t.Helper()
+	if routes == "" {
+		routes = mustRead(t, "testdata/cmd/server/routes.go")
+	}
 	root := t.TempDir()
 	copyDir(t, "testdata/internal", filepath.Join(root, "internal"))
 	write := func(rel, content string) {
@@ -30,7 +41,7 @@ func appWithRoutes(t *testing.T, routes string) string {
 		}
 	}
 	write("go.mod", strings.Replace(mustRead(t, "testdata/go.mod"), "=> ../..", "=> "+mustAbs(t, ".."), 1))
-	write("schema.sql", mustRead(t, "testdata/schema.sql"))
+	write("schema.sql", schema)
 	write("cmd/server/routes.go", routes)
 	return root
 }
@@ -84,9 +95,9 @@ func TestOwnershipEnglish(t *testing.T) {
 		}
 	}
 	// A read that is not limited to the caller's rows is allowed, and says so.
-	got, err := Render(inFixtureApp(t, myEventsFixture, "my_events",
-		"queries/count_events.sql", "WHERE organizer_id = sqlc.arg(organizer_id)", "WHERE created_as = sqlc.arg(created_as)",
-		"action.go", "a.q.CountMyEvents(ctx, in.User)", "a.q.CountMyEvents(ctx, in.Role)"))
+	got, err := Render(inFixtureApp(t, summaryFixture, "event_summary",
+		"queries/count.sql", "WHERE id = sqlc.arg(id) AND organizer_id = sqlc.arg(organizer_id)", "WHERE id = sqlc.arg(id)",
+		"action.go", "db.CountOwnEventParams{ID: in.EventID, OrganizerID: in.User}", "db.CountOwnEventParams{ID: in.EventID}"))
 	if err != nil {
 		t.Fatal(err)
 	}

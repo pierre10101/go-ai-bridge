@@ -35,12 +35,14 @@ copy bridge-en code into the app.
    - F2: <a long case continues on the next line,
      indented by two spaces>
    ```
-2. `features/<slice>/queries/*.sql` in the SQL shapes (Q0-Q7), then
+2. `features/<slice>/queries/*.sql` in the SQL shapes (Q0-Q9), then
    `sqlc generate`. A table whose rows belong to a user says so in
    `schema.sql`, on the comment line right above its `CREATE TABLE`:
-   `-- owner: organizer_id` (A4).
+   `-- owner: organizer_id` (A4). A table whose rows belong to rows of an
+   owned table names its parent instead:
+   `-- owner: event_id -> events.organizer_id` (A5).
 3. `features/<slice>/action.go` in the grammar (D1-D10, S1-S11, E1-E7, T1-T4,
-   A1-A4). The F-IDs it declares are exactly those of intent.md. It declares
+   A1-A5). The F-IDs it declares are exactly those of intent.md. It declares
    who may call it (A1, required): `var Roles = httpx.Roles("organizer",
    "admin")` for signed-in users with one of those roles (each role one of the
    app's, declared once in `cmd/server` with `httpx.AppRoles`), or
@@ -96,6 +98,19 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
   rows are marked once in `cmd/server`:
   `var AppRoles = httpx.AppRoles("customer", "organizer", "admin").BypassOwnership("admin")`;
   only an action whose Roles are all such roles may skip the filter.
+- **Child rows prove their parent is yours (A5).** For a table declared
+  `-- owner: event_id -> events.organizer_id`, the statement that writes
+  proves the parent row is the signed-in user's. An INSERT is an insert
+  from the parent row (Q8, `:execrows`, then `if n != 1 { return Output{},
+  F<n> }`): `INSERT INTO sections (event_id, name) SELECT events.id,
+  sqlc.arg(name) FROM events WHERE events.id = sqlc.arg(event_id) AND
+  events.organizer_id = sqlc.arg(organizer_id)`. An UPDATE adds the proof
+  subquery (Q9): `AND sections.event_id IN (SELECT events.id FROM events
+  WHERE events.organizer_id = sqlc.arg(organizer_id))` and never sets
+  `event_id`. Pass `OrganizerID: in.User`, and name every column with its
+  table in such a query. Copying `organizer_id` onto the child row proves
+  nothing and is refused. The English says "only sections of events you
+  own (`events.organizer_id` is the signed-in user)".
 - **A GET takes only the query values it declares (T4).** Any other query
   parameter (also another letter case, or a cache-buster like `?_=123`) is
   answered with HTTP 400, like an unknown body field. The UI sends exactly

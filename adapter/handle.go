@@ -208,6 +208,9 @@ func (w *walker) claimCond(c sqlCond, vals map[string]string, table string) stri
 	if c.Op == "in" {
 		return fmt.Sprintf(t("where in"), c.Col, vals[c.Val.Param])
 	}
+	if c.Op == "sub" {
+		return w.subPhrase("where sub", c.Col, c.Sub, vals)
+	}
 	if v := c.Val; v.Kind == "param" && vals[v.Param] == t("clock") {
 		if v.Op == "" {
 			return clockNow("`"+c.Col+"`", c.Op)
@@ -216,6 +219,25 @@ func (w *walker) claimCond(c sqlCond, vals map[string]string, table string) stri
 		return clockComparison(c.Col, c.Op, v.Op, n)
 	}
 	return fmt.Sprintf(t("where "+c.Op), c.Col, w.sqlValue(c.Val, vals, c.Col, table))
+}
+
+// subPhrase renders a Q9 proof subquery compared with column col: "`event_id`
+// is the `id` of an event whose `organizer_id` is the signed-in user" (key
+// "where sub"; "where has sub" in a count's guard), nested subqueries alike.
+func (w *walker) subPhrase(key, col string, sub *sqlSub, vals map[string]string) string {
+	conds := make([]string, len(sub.Conds))
+	for i, c := range sub.Conds {
+		conds[i] = w.claimCond(c, vals, sub.Table)
+	}
+	return fmt.Sprintf(t(key), col, sub.Key, article(singular(sub.Table)), strings.Join(conds, " and "))
+}
+
+// article puts "a" or "an" before a noun phrase.
+func article(noun string) string {
+	if noun != "" && strings.ContainsRune("aeiou", rune(noun[0])) {
+		return fmt.Sprintf(t("an"), noun)
+	}
+	return fmt.Sprintf(t("a"), noun)
 }
 
 // clockComparison renders <col> <op> <now> - n (sign "-") or + n (sign "+")
@@ -398,7 +420,9 @@ func (w *walker) domainNote(s *Step) bool {
 //     e.g. a read right after it, or the S10 guard "not exactly one" itself
 //     (0 rows, or several). "Any change made in step N is rolled back."
 //   - wroteNone: a claim that changed no row: only at a guard whose condition
-//     includes "no <row> was changed in step N" (`n == 0 && ...`). Nothing
+//     includes "no <row> was changed in step N" (`n == 0 && ...`), or the
+//     S10 guard of a Q8 insert from a parent row, which adds one row or
+//     none. Nothing
 //     is rolled back, so the English says "Nothing was written in step N."
 const (
 	wroteNone  = "none"
@@ -514,6 +538,10 @@ func (w *walker) stopStates(cond ast.Expr) map[int]string {
 			states[loc.step] = wroteNone
 		case op == token.EQL && v == "1":
 			states[loc.step] = wroteSome
+		case op == token.NEQ && v == "1" && loc.added:
+			// A Q8 names its parent row by the parent's key (checkProofs),
+			// so it adds one row or none: not exactly one is none.
+			states[loc.step] = wroteNone
 		}
 	}
 	return states
@@ -676,6 +704,9 @@ func (w *walker) query(s *ast.AssignStmt) {
 		for i, c := range q.Where {
 			key := tmpl
 			switch {
+			case c.Op == "sub": // Q9: "`event_id` is the `id` of an event whose ..."
+				parts[i] = w.subPhrase(map[string]string{"where is": "where sub", "where has": "where has sub"}[tmpl], c.Col, c.Sub, vals)
+				continue
 			case c.Val.Kind == "slice":
 				key += " in" // Q7: "`id` is one of the request's `seat_ids`"
 			case c.clockCond() && c.Val.Op != "":
@@ -720,7 +751,24 @@ func (w *walker) query(s *ast.AssignStmt) {
 		text, fails = fmt.Sprintf(st("insert"), singular(q.Table), q.Table, joinList(assigns), q.Name, q.File, singular(q.Table)),
 			fmt.Sprintf(st("insert fails"), w.internal())
 	case "claim":
-		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField}
+		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField, added: q.Source != ""}
+		if q.Source != "" { // Q8: add one row from a parent row, or none
+			assigns := make([]string, len(q.Values))
+			for i, v := range q.Values {
+				val := w.sqlValue(v.Val, vals, v.Col, q.Table)
+				if v.Val.Kind == "col" {
+					val = fmt.Sprintf(t("row field"), singular(q.Source), v.Val.Lit)
+				}
+				assigns[i] = fmt.Sprintf(t("field"), v.Col, val)
+			}
+			conds := make([]string, len(q.Conds))
+			for i, c := range q.Conds {
+				conds[i] = w.claimCond(c, vals, q.Source)
+			}
+			text, fails = fmt.Sprintf(st("claim insert"), singular(q.Table), q.Table, joinList(assigns), article(singular(q.Source)), strings.Join(conds, " and "), q.Name, q.File, singular(q.Source), singular(q.Table)),
+				fmt.Sprintf(st("query fails"), w.internal())
+			break
+		}
 		sets := make([]string, len(q.Values))
 		for i, v := range q.Values {
 			sets[i] = fmt.Sprintf(t("field"), v.Col, w.sqlValue(v.Val, vals, v.Col, q.Table))

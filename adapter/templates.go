@@ -117,6 +117,15 @@ var exprTemplates = map[string]string{
 	"changed one":     "exactly one %s was changed in step %d",
 	"changed not one": "not exactly one %s was changed in step %d",
 	"changed value":   "the number of %s changed in step %d",
+	// Q8 insert from a parent row (S10): a row added, or none.
+	"added none":    "no %s was added in step %d",
+	"added one":     "exactly one %s was added in step %d",
+	"added not one": "not exactly one %s was added in step %d",
+	"added value":   "the number of %s added in step %d",
+	// Q9 proof subquery: the outer column holds the key of a parent row
+	// that the subquery's conditions select.
+	"where sub":     "`%s` is the `%s` of %s whose %s",
+	"where has sub": "`%s` equal to the `%s` of %s whose %s",
 	// A4 ownership: what a step on an owned table says (see owner.go).
 	"owned update":   "Ownership: only %s you own (`%s` is the signed-in user) can be changed by this step.",
 	"owned insert":   "Ownership: the new %s is yours (`%s` is the signed-in user).",
@@ -124,6 +133,13 @@ var exprTemplates = map[string]string{
 	"unowned read":   "Ownership: this read is not limited to %s you own (`%s` is not compared with the signed-in user).",
 	"bypass write":   "Ownership: this step is not limited to %s you own (`%s` need not be the signed-in user), because only role %s may call this action and cmd/server declares that it bypasses ownership.",
 	"bypass write n": "Ownership: this step is not limited to %s you own (`%s` need not be the signed-in user), because only roles %s may call this action and cmd/server declares that they bypass ownership.",
+	// A5 inherited ownership: a child table's rows are yours through their
+	// parent; the update, read and bypass sentences above take "sections of
+	// events" and "events.organizer_id".
+	"child insert": "Ownership: the new %s is added only to %s you own (`%s` is the signed-in user); for any other %s nothing is written.",
+	"of":           "%s of %s",
+	"a":            "a %s",
+	"an":           "an %s",
 	// S11: a claim over a Q7 IN list against the length of its list.
 	"changed not len": "the number of %s changed in step %d is not the number of %s in %s",
 }
@@ -167,6 +183,7 @@ var stepTemplates = map[string]string{
 	"read return":    "End the read-only transaction, then answer HTTP %s with %s. If ending it fails, stop with HTTP %s.",
 	"insert":         "Write: add one %s to table `%s` with %s (query `%s` in %s). Call the stored row the new %s.",
 	"claim":          "Claim: in table `%s`, set %s on each %s whose %s at that moment (query `%s` in %s). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same %s.",
+	"claim insert":   "Claim: add one %s to table `%s` with %s, only if there is %s whose %s at that moment (query `%s` in %s). The condition is checked by the same statement that writes, never by an earlier read: if there is no such %s, no %s is added.",
 	"map each":       "For each of the listed %s, build %s:",
 	"map each empty": "If there are no listed %s, that list is empty.",
 	"query fails":    "If the query fails, stop with HTTP %s.",

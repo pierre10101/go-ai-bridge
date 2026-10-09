@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS tickets (
 );
 
 -- One row per event (create_event, my_events, rename_event,
--- admin_rename_event). organizer_id: the signed-in user who created it, and
+-- admin_rename_event, event_summary). organizer_id: the signed-in user who created it, and
 -- created_as: the role they had then. Both come from the server
 -- (server:"user", server:"role"), never from the request. The organizer
 -- owns the event (A4): an action that a role without the ownership bypass
@@ -46,4 +46,18 @@ CREATE TABLE IF NOT EXISTS events (
     created_as   TEXT    NOT NULL,
     title        TEXT    NOT NULL,
     starts_at    INTEGER NOT NULL
+);
+
+-- One row per section of an event (add_section, rename_section,
+-- admin_rename_section, my_events, event_summary): a block of seats with
+-- its own name and capacity. A section belongs to its event's organizer
+-- (A5): it has no owner column of its own, so an action that a role
+-- without the ownership bypass may call proves, in the statement that
+-- writes, that the event's organizer_id is the signed-in user.
+-- owner: event_id -> events.organizer_id
+CREATE TABLE IF NOT EXISTS sections (
+    id       INTEGER PRIMARY KEY,
+    event_id INTEGER NOT NULL REFERENCES events (id),
+    name     TEXT    NOT NULL,
+    capacity INTEGER NOT NULL CHECK (capacity > 0)
 );

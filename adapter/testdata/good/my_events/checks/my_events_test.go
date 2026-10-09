@@ -18,6 +18,8 @@ import (
 	"github.com/pierre10101/go-ai-bridge/runtime/txn"
 )
 
+// Organizer 7 owns events 1 and 2 (three sections), organizer 8 owns event
+// 3 (one section).
 func newConn(t *testing.T) *sql.DB {
 	t.Helper()
 	conn, err := store.Open(context.Background(), ":memory:", app.Schema)
@@ -25,7 +27,8 @@ func newConn(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	if _, err := conn.Exec(`INSERT INTO events (organizer_id, created_as, title, starts_at) VALUES (7, 'organizer', 'a', 1), (7, 'organizer', 'b', 2), (8, 'admin', 'c', 3)`); err != nil {
+	if _, err := conn.Exec(`INSERT INTO events (id, organizer_id, created_as, title, starts_at) VALUES (1, 7, 'organizer', 'a', 1), (2, 7, 'organizer', 'b', 2), (3, 8, 'admin', 'c', 3);
+		INSERT INTO sections (event_id, name, capacity) VALUES (1, 'Floor', 100), (1, 'Balcony', 40), (2, 'Floor', 80), (3, 'Floor', 60)`); err != nil {
 		t.Fatal(err)
 	}
 	return conn
@@ -54,39 +57,56 @@ func serve(t *testing.T, conn *sql.DB, target, user, role string) *httptest.Resp
 	return rec
 }
 
-// "Who may call it: anyone, signed in or not." Signed out, the user is 0
-// and the role the empty text (no event has organizer 0); signed in, they
-// are the signed-in user's, in any role.
-func TestHTTPAnyoneMayCall(t *testing.T) {
+// "only events you own (`organizer_id` is the signed-in user) are read" and
+// "only sections of events you own (`events.organizer_id` is the signed-in
+// user) are read": each organizer counts only their own.
+func TestHTTPOrganizerCountsOnlyOwnEventsAndSections(t *testing.T) {
 	conn := newConn(t)
 	for _, tc := range []struct {
-		user, role string
-		want       my_events.Output
+		user string
+		want my_events.Output
 	}{
-		{"", "", my_events.Output{Events: 0, Role: ""}},
-		{"7", "organizer", my_events.Output{Events: 2, Role: "organizer"}},
-		{"8", "customer", my_events.Output{Events: 1, Role: "customer"}},
-		{"9", "finance", my_events.Output{Events: 0, Role: "finance"}},
-		{"7", "superuser", my_events.Output{Events: 0, Role: ""}}, // a role the app does not declare: not signed in
+		{"7", my_events.Output{Events: 2, Sections: 3}},
+		{"8", my_events.Output{Events: 1, Sections: 1}},
+		{"9", my_events.Output{Events: 0, Sections: 0}},
 	} {
-		rec := serve(t, conn, "/me/events", tc.user, tc.role)
+		rec := serve(t, conn, "/me/events", tc.user, "organizer")
 		var out my_events.Output
 		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out != tc.want {
-			t.Errorf("user %q role %q: status %d %s; want %+v", tc.user, tc.role, rec.Code, rec.Body, tc.want)
+			t.Errorf("user %q: status %d %s; want %+v", tc.user, rec.Code, rec.Body, tc.want)
 		}
 	}
 }
 
-// The user and role never come from the query string: 400, also signed out.
-func TestHTTPUserOrRoleInTheQueryIs400(t *testing.T) {
+// "Who may call it: signed-in users with role `organizer`." Signed out: 401
+// (there is no "user 0" answer); any other role: 403.
+func TestHTTPOnlyOrganizers(t *testing.T) {
 	conn := newConn(t)
-	for _, target := range []string{"/me/events?user=7", "/me/events?role=admin", "/me/events?USER=7"} {
-		for _, user := range []string{"", "8"} {
-			rec := serve(t, conn, target, user, "customer")
-			var body httpx.ErrorBody
-			if json.Unmarshal(rec.Body.Bytes(), &body) != nil || rec.Code != httpx.BadInput.Status || body.Error.ID != httpx.BadInput.ID {
-				t.Errorf("%s (user %q): status %d %s", target, user, rec.Code, rec.Body)
-			}
+	for _, tc := range []struct {
+		user, role string
+		want       httpx.Outcome
+	}{
+		{"", "", httpx.Unauthenticated},
+		{"7", "superuser", httpx.Unauthenticated}, // a role the app does not declare: not signed in
+		{"7", "customer", httpx.Forbidden},
+		{"7", "admin", httpx.Forbidden},
+	} {
+		rec := serve(t, conn, "/me/events", tc.user, tc.role)
+		var body httpx.ErrorBody
+		if json.Unmarshal(rec.Body.Bytes(), &body) != nil || rec.Code != tc.want.Status || body.Error.ID != tc.want.ID {
+			t.Errorf("user %q role %q: status %d %s", tc.user, tc.role, rec.Code, rec.Body)
+		}
+	}
+}
+
+// The user never comes from the query string: 400.
+func TestHTTPUserInTheQueryIs400(t *testing.T) {
+	conn := newConn(t)
+	for _, target := range []string{"/me/events?user=8", "/me/events?USER=8"} {
+		rec := serve(t, conn, target, "7", "organizer")
+		var body httpx.ErrorBody
+		if json.Unmarshal(rec.Body.Bytes(), &body) != nil || rec.Code != httpx.BadInput.Status || body.Error.ID != httpx.BadInput.ID {
+			t.Errorf("%s: status %d %s", target, rec.Code, rec.Body)
 		}
 	}
 }

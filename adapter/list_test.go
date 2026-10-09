@@ -227,7 +227,7 @@ func TestINShapes(t *testing.T) {
 	for name, tc := range map[string]struct{ src, want string }{
 		"param after":  {"-- name: Q :one\nSELECT COUNT(*) FROM tickets WHERE id IN (sqlc.slice(ids)) AND held_by = ?;\n", "q.sql:2:74: refused: parameter held_by after IN (sqlc.slice(ids))"},
 		"bare ?":       {"-- name: Q :one\nSELECT COUNT(*) FROM tickets WHERE id IN (?);\n", "Expected (sqlc.slice(<name>)) after IN"},
-		"subquery":     {"-- name: Q :one\nSELECT COUNT(*) FROM tickets WHERE id IN (SELECT id FROM tickets);\n", "Expected (sqlc.slice(<name>)) after IN"},
+		"subquery":     {"-- name: Q :one\nSELECT COUNT(*) FROM tickets WHERE id IN (SELECT id FROM tickets);\n", "Expected <table>.<key>: the subquery's column with its table"},
 		"not in":       {"-- name: Q :one\nSELECT COUNT(*) FROM tickets WHERE id NOT IN (sqlc.slice(ids));\n", "refused: NOT is not in the allowed pattern list"},
 		"in a group":   {"-- name: Q :execrows\nUPDATE tickets SET sold_to = ? WHERE held_by = ? AND (id IN (sqlc.slice(ids)) OR held_by = '');\n", "refused: IN inside an OR group"},
 		"same name":    {"-- name: Q :one\nSELECT COUNT(*) FROM tickets WHERE held_by = sqlc.arg(ids) AND id IN (sqlc.slice(ids));\n", "refused: sqlc.slice(ids) named like another parameter"},

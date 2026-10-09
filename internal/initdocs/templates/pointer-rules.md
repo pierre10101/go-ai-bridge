@@ -15,6 +15,8 @@ app (bridge-en {{VERSION}}). The five rules that matter most:
    claim is one conditional UPDATE checked by `!= 1` (or
    `!= int64(len(in.<List>))`). A write to a table declared
    `-- owner: <col>` in schema.sql is limited to `<col> = in.User` unless
-   only roles marked `.BypassOwnership(...)` in cmd/server may call it.
+   only roles marked `.BypassOwnership(...)` in cmd/server may call it; a
+   child table (`-- owner: <fk> -> <parent>.<pcol>`) is written only by a
+   statement that proves the parent is the user's (Q8 or Q9).
 5. Change code only through pull requests; never push to main. Install the
    bridge-en version that go.mod pins.

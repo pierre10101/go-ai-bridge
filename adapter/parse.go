@@ -128,6 +128,7 @@ type local struct {
 	multi   bool     // changed: a claim over <key> IN (sqlc.slice(...)) (Q7), checked by S11
 	list    string   // changed, multi: the list input (Go field name) its IN list is bound to
 	nested  int      // changed: the line of the first guard that tests the check inside a compound condition
+	added   bool     // changed: a Q8 insert from a parent row (adds one row or none), not a Q6 update
 }
 
 // ParseAction parses <dir>/action.go and <dir>/queries/*.sql, reads the

@@ -1,7 +1,8 @@
-// Package my_events is a fixture slice: it proves how bridge-en renders a
-// Public action (A1: anyone may call it, signed in or not) whose signed-in
-// user and role (T3, server:"user" and server:"role") are 0 and the empty
-// text when nobody is signed in. scripts/smoke-app.sh runs its checks.
+// Package my_events is a fixture slice: it proves how bridge-en renders
+// reads limited to the signed-in user's own rows, of an owned table (A4:
+// organizer_id = in.User) and of a child table (A5: a Q9 subquery proves
+// the section's event is the signed-in user's). scripts/smoke-app.sh runs
+// its checks.
 package my_events
 
 import (
@@ -14,17 +15,17 @@ import (
 
 const Route = "GET /me/events"
 
-// Roles: anyone may call it, signed in or not (A1).
-var Roles = httpx.Public
+// Roles: only signed-in organizers (A1): "my events" means nothing to a
+// visitor who is not signed in.
+var Roles = httpx.Roles("organizer")
 
 type Input struct {
-	User int64  `json:"user" server:"user"`
-	Role string `json:"role" server:"role"`
+	User int64 `json:"user" server:"user"`
 }
 
 type Output struct {
-	Events int64  `json:"events"`
-	Role   string `json:"role"`
+	Events   int64 `json:"events"`
+	Sections int64 `json:"sections"`
 }
 
 type Action struct {
@@ -34,12 +35,16 @@ type Action struct {
 func New(q *db.Queries) *Action { return &Action{q: q} }
 
 func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
-	events, err := a.q.CountMyEvents(ctx, in.User)
+	eventCount, err := a.q.CountMyEvents(ctx, in.User)
+	if err != nil {
+		return Output{}, err
+	}
+	sectionCount, err := a.q.CountMySections(ctx, in.User)
 	if err != nil {
 		return Output{}, err
 	}
 
-	out := Output{Events: events, Role: in.Role}
-	assert.Post(out.Role == in.Role, "the answer carries the signed-in user's role")
+	out := Output{Events: eventCount, Sections: sectionCount}
+	assert.Post(out.Sections >= 0, "the number of sections is never negative")
 	return out, nil
 }

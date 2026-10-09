@@ -24,6 +24,12 @@ compare the two: what was asked, and what was built.
   not limited to the signed-in user's rows, unless only roles the app marks
   as bypassing ownership (`httpx.AppRoles(...).BypassOwnership("admin")`)
   may call the action. The English says "only events you own".
+- A table whose rows belong to rows of an owned table names its parent
+  (`-- owner: event_id -> events.organizer_id`, chains allowed); every write
+  to it must prove, in the statement that writes, that the parent row is the
+  signed-in user's (an insert from the caller's parent row, or an
+  `IN (SELECT ...)` proof subquery). The English says "only sections of
+  events you own".
 - Requests are strict: a body field or a GET query parameter the action
   does not declare is answered with HTTP 400.
 - [RULEBOOK.md](RULEBOOK.md) is the reference: every rule with an example, its
@@ -47,10 +53,10 @@ same version (`-check` refuses any other).
 ```sh
 mkdir seat-app && cd seat-app && git init -q
 go mod init example.com/seat-app
-go get github.com/pierre10101/go-ai-bridge@v0.4.0
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.4.0
+go get github.com/pierre10101/go-ai-bridge@v0.5.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.5.0
 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-bridge-en -version                      # bridge-en 0.4.0
+bridge-en -version                      # bridge-en 0.5.0
 ```
 
 **2. Init.** Writes the instructions for AI agents (and you). Documents only,
@@ -195,7 +201,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0   # the version go.mod pins
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0   # the version go.mod pins
       - run: go test ./...
       - run: bridge-en -check features/*/
   english:
@@ -209,8 +215,8 @@ jobs:
         with: { fetch-depth: 0 }    # the comment diffs against the PR's base
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.4.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.4.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.5.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.5.0
         # with: { features: "features/*/", max-chars: "60000" }
 ```
 
@@ -236,6 +242,48 @@ git diff                         # review every .en change, then open a PR
 
 A new version can change the English of every feature (new wording, new
 rules); the `.en` diff in that pull request shows exactly how.
+
+### 0.4.x to 0.5.0: breaking change (inherited ownership)
+
+0.5.0 adds A5 (inherited ownership) and two SQL shapes, Q8 (insert from a
+parent row) and Q9 (proof subquery). It is a **breaking change** in two
+ways: (1) a table that declares `-- owner: <fk> -> <parent>.<pcol>` gets
+every write refused that does not prove its parent is the caller's (opt-in
+per table, as A4 was); (2) a query that uses Q8 or Q9 names every column
+with its table (`sections.id`), because sqlc reports an unqualified column
+as ambiguous once two tables are read. The `.en` of an app changes only
+where it adopts A5 (and the S10 English of a Q8 says "added").
+
+1. **A5 (opt-in per child table):** for each table whose rows belong to
+   rows of an owned table (the sections of an event, the line items of an
+   order), add, right above its `CREATE TABLE` in `schema.sql`,
+   `-- owner: <fk> -> <parent>.<pcol>`: `<fk>` holds the parent's
+   single-column `PRIMARY KEY` (same type), `<pcol>` is the column the
+   parent's own `-- owner:` names (its owner column, or its `<fk>` if the
+   parent is a child too). Do not copy the owner column onto the child to
+   "scope" it: a copy proves nothing and is refused as a proof.
+2. Run `bridge-en -check features/*/`. For each A5 refusal from an action a
+   role without the bypass may call:
+   - an INSERT becomes a Q8 insert from the parent row, `:execrows`, no
+     `RETURNING`:
+     `INSERT INTO sections (event_id, name) SELECT events.id, sqlc.arg(name) FROM events WHERE events.id = sqlc.arg(event_id) AND events.organizer_id = sqlc.arg(organizer_id);`
+     then `if added != 1 { return Output{}, F<n> }` (S10) with a new
+     failure case such as "the event does not exist, or the signed-in user
+     does not own it" (HTTP 404) in `intent.md`; the action no longer gets
+     the new row's id back (read it in a later step if it must answer it);
+   - an UPDATE gains the Q9 proof as an AND condition:
+     `AND sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id))`,
+     with every column qualified, and never sets `<fk>`;
+   - run `sqlc generate` and pass `OrganizerID: in.User`.
+   If the action is really for admins only, give it `Roles` that bypass
+   ownership instead; a `Public` action cannot write a child table.
+3. Run `bridge-en -write features/*/` and review every `.en` diff: each
+   step on a child table gains "Ownership: only sections of events you own
+   (`events.organizer_id` is the signed-in user) ..." (or, for a read,
+   whether it is limited to your rows).
+4. Add checks: over HTTP against SQLite, user B cannot add to or change
+   rows under user A's parent (HTTP 404, nothing written).
+5. Run `bridge-en init -force` to get the 0.5.0 `AGENTS.md` (A5, Q8, Q9).
 
 ### 0.3.x to 0.4.0: breaking change (ownership, strict GET queries)
 
@@ -405,7 +453,8 @@ GitHub Copilot and Gemini CLI.
 cmd/bridge-en/            the CLI (render, -check, -write, init, pr-comment)
 adapter/                  the compiler: grammar.go (rule list), templates.go (every English word),
                           intent.go (I1-I3), parse/handle/expr.go, sql.go, domain.go, plumbing.go,
-                          schema.go (keys, A4 owner annotations), owner.go (A4), check.go, pin.go
+                          schema.go (keys, A4/A5 owner annotations), owner.go (A4), inherit.go (A5),
+                          check.go, pin.go
 adapter/testdata/         a parse-only fixture app: good/ (render, with golden .en and checks),
                           bad/ (refused, want.err), bad_intent/ (intent refusals, want.err)
 internal/initdocs/        the AGENTS.md and pointer templates (go:embed) for bridge-en init
@@ -437,13 +486,14 @@ and publishes the archives, `RULEBOOK.md` and `SHA256SUMS`.
 | `adapter TestRulebookCoversGrammar` | RULEBOOK.md has exactly one section per rule ID |
 | `adapter TestRolesContract`, `TestRolesRefusals`, `TestAppRoles` | A1-A3, T3: who may call each action, the app-wide role list, the signed-in user and role in the English, and every refused form |
 | `adapter TestOwnershipEnglish`, `TestOwnershipRefusals`, `TestOwnerAnnotations`, `TestBypassOwnership` | A4: the "Ownership:" sentence of every step on an owned table; an unscoped write, a write scoped to a request field or a literal, a Public writer, a given-away row, a user of another type, a malformed annotation and a malformed bypass are refused at `file:line:col` |
+| `adapter TestInheritedEnglish`, `TestInheritedRefusals`, `TestInheritedAnnotations` | A5, Q8, Q9: the "Ownership:" sentence of every step on a child table (also a 3-level chain); an unproved insert or update, a proof bound to a request field or one level short, a copied owner column, a moved parent, a Public writer and every malformed inherited annotation (unknown column or table, unowned parent, wrong column, type mismatch, no key, cycle, 4-level chains) are refused at `file:line:col` |
 | `runtime/httpx TestStrictQueryRule` | T4: a GET with an undeclared query parameter (any letter case, a path name) is HTTP 400 and the action does not run |
 | `runtime/httpx TestRolesRule`, `TestZeroAccessDeniesEveryone`, `TestPublicRule`, `TestUserAndRoleAreNeverSent` | 401 / 403 before the action runs, deny by default, the signed-in user and role filled by the server and never accepted from the request |
 | `adapter TestClock*`, `TestSession*`, `TestRollbackWording`, `TestStrictClaimCheck`, `TestMultiRowClaim*`, `TestINShapes`, `TestPrimaryKeys`, `TestSQLShapes`, `TestClaimRules`, `TestRefusalsInHandle`, `TestDomainUnderGrammar`, `TestBoundNeedsTxn`, `TestCheckPin` | the exact English and refusals of each rule (see RULEBOOK.md) |
 | `internal/initdocs Test*` | init writes only the five documents, keeps existing files without `-force`, and AGENTS.md covers the workflow |
 | `internal/prcomment Test*` | the comment shows each changed feature's intent (full or diff) and `.en` diff, starts with its marker, is the same on every run, and stays under its size limit |
 | `runtime/... Test*` | every HTTP and transaction sentence the English quotes |
-| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency; over HTTP, 401, 403 and the allowed roles (create_event, create_invoice, list_customer_invoices), nothing written on 401/403; organizer B cannot rename organizer A's event (rename_event, nothing written) while an admin can (admin_rename_event); an undeclared query parameter is HTTP 400 (list_customer_invoices, my_events) |
+| `testdata/good/*/checks` (via `smoke-app.sh`) | each fixture failure case fires against SQLite and writes nothing; boundaries; concurrency; over HTTP, 401, 403 and the allowed roles (create_event, create_invoice, list_customer_invoices), nothing written on 401/403; organizer B cannot rename organizer A's event (rename_event, nothing written) while an admin can (admin_rename_event); organizer B cannot add a section to, or rename a section of, organizer A's event (add_section, rename_section: HTTP 404, nothing written) while an admin can rename it (admin_rename_section); an undeclared query parameter is HTTP 400 (list_customer_invoices, my_events) |
 
 ## License
 

@@ -268,6 +268,7 @@ func loadEnv(dir string) (*env, Refusals, error) {
 		return nil, nil, err
 	}
 	refusals = append(refusals, ownerErrs...)
+	refusals = append(refusals, checkProofs(owners, q)...) // A5: Q8, Q9 against schema.sql
 	return &env{root: root, domain: d, http: h, queries: q, roles: roles, owners: owners}, append(domainErrs, refusals...), nil
 }
 

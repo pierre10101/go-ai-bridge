@@ -78,6 +78,9 @@ func TestAgentsCoversTheWorkflow(t *testing.T) {
 		"-- owner: organizer_id", "AND\n  organizer_id = sqlc.arg(organizer_id)", "`OrganizerID: in.User`",
 		`.BypassOwnership("admin")`, "only events you own", "Public action never writes it",
 		"A GET takes only the query values it declares (T4)", "answered with HTTP 400",
+		"-- owner: event_id -> events.organizer_id", "Child rows prove their parent is yours (A5)",
+		"SELECT events.id,\n  sqlc.arg(name) FROM events", "sections.event_id IN (SELECT events.id FROM events",
+		"only sections of events you\n  own", "Q0-Q9", "A1-A5",
 	} {
 		if !strings.Contains(s, w) {
 			t.Errorf("AGENTS.md: missing %q", w)

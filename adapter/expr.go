@@ -138,6 +138,9 @@ func (w *walker) changedCond(e *ast.BinaryExpr, loc *local) string {
 			"Compare a Q6 result only as != 1 (the check), == 1 or == 0")
 		return "?"
 	}
+	if loc.added {
+		key = strings.Replace(key, "changed", "added", 1)
+	}
 	return fmt.Sprintf(t(key), singular(loc.table), loc.step)
 }
 
@@ -300,6 +303,9 @@ func (w *walker) localName(name string, loc *local) string {
 	case "count":
 		return fmt.Sprintf(t("count value"), plural(loc.table), loc.where)
 	case "changed":
+		if loc.added {
+			return fmt.Sprintf(t("added value"), plural(loc.table), loc.step)
+		}
 		return fmt.Sprintf(t("changed value"), plural(loc.table), loc.step)
 	case "row":
 		return fmt.Sprintf(t("row"), loc.phrase)

@@ -63,8 +63,8 @@ func TestRolesContract(t *testing.T) {
 		t.Fatalf("want %q in:\n%s", want, got)
 	}
 	// Public: anyone; no 401/403 line; the user and role say their signed-out
-	// value. my_events is the fixture app's Public action (a read).
-	got, err = Render(myEventsFixture)
+	// value. event_summary is the fixture app's Public action (a read).
+	got, err = Render(summaryFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestRolesRefusals(t *testing.T) {
 // TestAppRoles (A2): the app's roles are declared once in cmd/server with
 // httpx.AppRoles; a role-restricted action in an app without it is refused,
 // and so is a malformed declaration. A Public action (the fixture app's
-// my_events) needs none.
+// event_summary) needs none.
 func TestAppRoles(t *testing.T) {
 	routes := func(decl string) string {
 		return "package main\n\nimport \"github.com/pierre10101/go-ai-bridge/runtime/httpx\"\n\n" + decl + "\n"
@@ -175,7 +175,7 @@ func TestAppRoles(t *testing.T) {
 			}
 			var dir string
 			if tc.roles == `httpx.Public` {
-				dir = addSlice(t, root, myEventsFixture, "my_events")
+				dir = addSlice(t, root, summaryFixture, "event_summary")
 			} else {
 				dir = addSlice(t, root, eventFixture, "create_event", "action.go", `httpx.Roles("organizer", "admin")`, tc.roles)
 			}

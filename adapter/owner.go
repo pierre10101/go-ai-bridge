@@ -26,11 +26,18 @@ func (w *walker) ownership(s ast.Stmt, q *SQLQuery) string {
 		return ""
 	}
 	user := w.userField()
-	if user != nil && user.goType != o.GoType && !w.ownerTypeSeen {
+	if r := o.root(); user != nil && user.goType != o.GoType && !w.ownerTypeSeen {
 		w.ownerTypeSeen = true
 		col := map[string]string{"int64": "INTEGER", "string": "TEXT"}[o.GoType]
-		w.errs = append(w.errs, Refusal{Pos: user.pos, Construct: fmt.Sprintf("signed-in user field %s of type %s for table %s, whose owner column %s is %s (%s)", user.Name, user.goType, q.Table, o.Col, col, o.pos),
+		owned := r.Col
+		if o.Parent != nil {
+			owned = r.Table + "." + r.Col
+		}
+		w.errs = append(w.errs, Refusal{Pos: user.pos, Construct: fmt.Sprintf("signed-in user field %s of type %s for table %s, whose owner column %s is %s (%s)", user.Name, user.goType, q.Table, owned, col, r.pos),
 			Context: "A4 ownership", Hint: fmt.Sprintf("The signed-in user is compared with the owner column, so they have the same type: User %s `json:\"user\" server:\"user\"` for %s owner column (or change the column's type in schema.sql)", o.GoType, map[string]string{"INTEGER": "an INTEGER", "TEXT": "a TEXT"}[col])})
+	}
+	if o.Parent != nil {
+		return w.childOwnership(s, q, o) // A5
 	}
 	rows, row := plural(q.Table), singular(q.Table)
 	scoped, other, otherAt := w.ownerScope(q, o.Col)
