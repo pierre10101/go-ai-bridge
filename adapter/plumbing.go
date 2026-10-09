@@ -41,6 +41,8 @@ type plumbing struct {
 	Success            map[string]int // route method -> status
 	InputRule          string
 	QueryInputRule     string
+	PathBodyRule       string // path:"..." on a non-GET: never also in the body
+	PathBodyWhen       string // the BadInput condition of an action with a path field on a non-GET
 	BadQueryWhen       string
 	TxRule             string // {first}, {last} and {commit} are step numbers
 	ReadTxRule         string // GET: {first}, {last} and {end} are step numbers
@@ -160,6 +162,8 @@ func loadHTTPX() (*plumbing, error) {
 		Success:         map[string]int{},
 		InputRule:       httpx.InputRule,
 		QueryInputRule:  httpx.QueryInputRule,
+		PathBodyRule:    httpx.PathBodyRule,
+		PathBodyWhen:    httpx.PathBodyWhen,
 		BadQueryWhen:    httpx.BadQueryWhen,
 		TxRule:          httpx.TxRule,
 		ReadTxRule:      httpx.ReadTxRule,
@@ -249,10 +253,16 @@ func loadEnv(dir string) (*env, Refusals, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	q, refusals, err := LoadQueries(filepath.Join(dir, "queries"))
+	queriesDir := filepath.Join(dir, "queries")
+	q, refusals, err := LoadQueries(queriesDir)
 	if err != nil {
 		return nil, nil, err
 	}
+	asciiErrs, err := checkASCII(root, queriesDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	refusals = append(refusals, asciiErrs...)
 	keyErrs, err := checkClaimKeys(root, q)
 	if err != nil {
 		return nil, nil, err

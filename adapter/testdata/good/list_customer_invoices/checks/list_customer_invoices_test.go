@@ -114,15 +114,13 @@ func TestF2_BadPageLimitIsRefused(t *testing.T) {
 	}
 }
 
-func TestF3_NonPositiveCursorIsRefused(t *testing.T) {
+func TestF3_NegativeCursorIsRefused(t *testing.T) {
 	a, _ := newAction(t)
-	for _, after := range []int64{0, -1} {
-		_, err := handle(a, list_customer_invoices.Input{
-			CustomerID: 1, After: after, Limit: 20,
-		})
-		if !errors.Is(err, list_customer_invoices.F3) {
-			t.Fatalf("after %d: want F3, got %v", after, err)
-		}
+	_, err := handle(a, list_customer_invoices.Input{
+		CustomerID: 1, After: -1, Limit: 20,
+	})
+	if !errors.Is(err, list_customer_invoices.F3) {
+		t.Fatalf("after -1: want F3, got %v", err)
 	}
 }
 

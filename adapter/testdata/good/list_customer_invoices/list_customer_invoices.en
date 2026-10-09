@@ -12,7 +12,7 @@ The request has no JSON body. It takes these values from the path and the query 
 - `customer_id`, from the path (`{id}`): a whole number.
 - `after`, from the query string (may be left out): a whole number.
 - `limit`, from the query string (may be left out): a whole number.
-Path values are required. A query value may be left out: `limit` is then the default page size and `after` starts the list at the newest row. A missing path value, or a value that is not a whole number, is answered with HTTP 400 below and the action does not run. The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
+Path values are required. A query value may be left out: `limit` is then the default page size and `after` starts the list at the newest row (omit it, or send `0`; both mean the start of the list). A missing path value, or a value that is not a whole number, is answered with HTTP 400 below and the action does not run. The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
 
 Every answer is JSON. An error answer is `{"error": {"id": <id>, "message": <message>}}`.
 - HTTP 200 OK on success, with an object of these 2 fields:
@@ -39,7 +39,7 @@ The action does exactly this, in this order. A step that stops the action ends i
 Steps 3 to 9 run in one read-only database transaction. It begins with the query in step 3 and takes no write lock; every query in it reads the same snapshot of the database, and a write inside it fails. It ends in step 10, before the answer is sent.
 
 1. If the request's `limit` is not between 1 and 100 (both included), stop with F2: HTTP 400 Bad Request "page limit is out of range".
-2. If the request's `after` is at most 0, stop with F3: HTTP 400 Bad Request "page cursor must be greater than zero".
+2. If the request's `after` is less than 0, stop with F3: HTTP 400 Bad Request "page cursor must not be negative".
 3. Read: count the customers whose `id` is the request's `customer_id` (query `CustomerExists` in queries/customer_exists.sql). If the query fails, stop with HTTP 500 Internal Server Error.
 4. If no customer has `id` equal to the request's `customer_id`, stop with F1: HTTP 422 Unprocessable Entity "customer does not exist".
 5. Read: list the invoices whose `customer_id` is the request's `customer_id` and whose `seq` is less than the request's `after`, highest `seq` first, at most the request's `limit` of them (query `ListCustomerInvoices` in queries/list_customer_invoices.sql). Call them the listed invoices; there may be none. If the query fails, stop with HTTP 500 Internal Server Error.
@@ -62,4 +62,4 @@ Steps 3 to 9 run in one read-only database transaction. It begins with the query
 Index by F-ID; the order they are checked in is in Steps.
 - F1 "customer does not exist": HTTP 422 Unprocessable Entity; step 4.
 - F2 "page limit is out of range": HTTP 400 Bad Request; step 1.
-- F3 "page cursor must be greater than zero": HTTP 400 Bad Request; step 2.
+- F3 "page cursor must not be negative": HTTP 400 Bad Request; step 2.

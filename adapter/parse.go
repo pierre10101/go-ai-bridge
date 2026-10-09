@@ -24,6 +24,8 @@ type Field struct {
 	Name, JSON, Type, Line string
 	Domain                 string // domain type name, for domain.<T> fields
 	ServerSet              string // "clock" (T1, `clock:"now"`), "session" (T2, `server:"session"`), "user" or "role" (T3): filled by httpx, never sent
+	Path                   string // path:"<name>": filled from the URL by httpx.Bind on every method; never from the body
+	Query                  string // query:"<name>": GET only; filled from the query string
 	List                   string // D10 list input: the element type (int64 or string); "" for any other field
 	goType                 string // the Go type as written (int64, string, ...)
 	pos                    token.Position
@@ -57,12 +59,12 @@ type Step struct {
 type Feature struct {
 	Dir, Package, Title, Method, Path                          string
 	Input, Output                                              []Field
-	BodyInput, ServerSet                                       []Field  // Input split: sent by the caller / set by the server (T1, T2, T3)
+	BodyInput, PathInput, ServerSet                            []Field  // Input split: body / path / set by the server (T1, T2, T3)
 	Public                                                     bool     // A1: var Roles = httpx.Public
 	Roles                                                      []string // A1: var Roles = httpx.Roles(...), in declared order
 	AccessLine                                                 string   // A1: who may call it (httpx.PublicRule or httpx.RolesRule)
 	rolesSeen                                                  bool
-	ServerIntro                                                string
+	ServerIntro, PathIntro                                     string
 	InputCount, InputIntro, InputRule, ErrorShape, SuccessLine string
 	DataLine, NoPre, InternalStatus, TxLine                    string
 	Answers                                                    []string
@@ -405,14 +407,17 @@ func (w *walker) fields(ts *ast.TypeSpec, ctx string, limit bool) []Field {
 				w.refuse(fl, fmt.Sprintf("field %s with json name %q that the caller sends", name, tag), "T3 user, role passed in", identityHint)
 			}
 		}
+		pathName, queryName := "", ""
 		switch p := structTag(fl.Tag, "path"); {
 		case server != "": // T1/T2: the line says how the server sets it
 		case p != "":
+			pathName = p
 			line = fmt.Sprintf(docSentences["path field"], tag, p, typ)
 		case structTag(fl.Tag, "query") != "":
+			queryName = structTag(fl.Tag, "query")
 			line = fmt.Sprintf(docSentences["query field"], tag, typ)
 		}
-		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, ServerSet: server, List: list, goType: types.ExprString(fl.Type), pos: w.fset.Position(fl.Pos())})
+		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, ServerSet: server, Path: pathName, Query: queryName, List: list, goType: types.ExprString(fl.Type), pos: w.fset.Position(fl.Pos())})
 	}
 	if limit && len(out) > MaxInputFields {
 		w.refuse(ts, fmt.Sprintf("Input with %d fields", len(out)), "hard limit", fmt.Sprintf("At most %d fields", MaxInputFields))
@@ -452,7 +457,11 @@ func (w *walker) fieldType(e ast.Expr, ctx string) (string, string) {
 			return "", ""
 		}
 		base := w.domainTypePhrase(e, sel.Sel.Name, false)
-		list := fmt.Sprintf(typeTemplates["list"], pluralPhrase(base))
+		explicit := ""
+		if dt := w.env.domain.Types[sel.Sel.Name]; dt != nil {
+			explicit = dt.Plural
+		}
+		list := fmt.Sprintf(typeTemplates["list"], pluralPhraseOf(base, explicit))
 		if full := w.domainTypePhrase(e, sel.Sel.Name, true); full != base {
 			list += ", each " + strings.TrimPrefix(full, base+", as ")
 		}

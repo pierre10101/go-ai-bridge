@@ -737,8 +737,12 @@ func (w *walker) query(s *ast.AssignStmt) {
 		limitEn := w.sqlValue(q.Limit, vals, "limit", q.Table)
 		cursorEn := w.sqlValue(q.CursorVal, vals, q.CursorCol, q.Table)
 		loc.limit = limitEn
-		text, fails = fmt.Sprintf(st("page"), plural(q.Table), where("where is"), q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table)),
-			fmt.Sprintf(st("query fails"), w.internal())
+		if eq := where("where is"); eq == "" {
+			text = fmt.Sprintf(st("page bare"), plural(q.Table), q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table))
+		} else {
+			text = fmt.Sprintf(st("page"), plural(q.Table), eq, q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table))
+		}
+		fails = fmt.Sprintf(st("query fails"), w.internal())
 		w.f.hasPageQuery = true
 		if max, _ := pageSizes(); q.Limit.Kind == "int" && q.LimitN > max {
 			w.refuse(s, fmt.Sprintf("query %s with LIMIT %d", q.Name, q.LimitN), "Q5 keyset page", fmt.Sprintf("LIMIT must be 1..%d (page.MaxPageSize)", max))
@@ -1145,6 +1149,14 @@ func (w *walker) finish() {
 	}
 	for i := range f.Input {
 		in := &f.Input[i]
+		if in.Path != "" && !strings.Contains(f.Path, "{"+in.Path+"}") {
+			w.errs = append(w.errs, Refusal{Pos: in.pos, Construct: fmt.Sprintf("path:%q field %s whose Route has no {%s}", in.Path, in.Name, in.Path),
+				Context: "D4 input", Hint: fmt.Sprintf("The route is %s %s; put {%s} in the path (for example /things/{%s})", f.Method, f.Path, in.Path, in.Path)})
+		}
+		if in.Query != "" && f.Method != "GET" {
+			w.errs = append(w.errs, Refusal{Pos: in.pos, Construct: "query tag on " + in.Name + " in a " + f.Method + " action",
+				Context: "D4 input", Hint: "query:\"...\" is only for GET; on POST, PUT, PATCH or DELETE use a body field, or path:\"...\" for a URL value"})
+		}
 		rule := map[string]string{"user": h.UserRule, "role": h.RoleRule}[in.ServerSet]
 		if rule == "" {
 			continue
@@ -1153,9 +1165,14 @@ func (w *walker) finish() {
 		in.Line = fmt.Sprintf(docSentences["field"], in.JSON, strings.Replace(rule, "{signed out}", out, 1))
 	}
 	for _, in := range f.Input {
-		if in.ServerSet != "" {
+		switch {
+		case in.ServerSet != "":
 			f.ServerSet = append(f.ServerSet, in)
-		} else {
+		case in.Path != "" && f.Method != "GET":
+			// Non-GET: path values are listed apart from the JSON body.
+			// GET keeps path and query together under QueryInputRule.
+			f.PathInput = append(f.PathInput, in)
+		default:
 			f.BodyInput = append(f.BodyInput, in)
 		}
 	}
@@ -1164,6 +1181,12 @@ func (w *walker) finish() {
 		f.ServerIntro = docSentences["server intro 1"]
 	case n > 1:
 		f.ServerIntro = fmt.Sprintf(docSentences["server intro n"], n)
+	}
+	switch n := len(f.PathInput); {
+	case n == 1:
+		f.PathIntro = docSentences["path intro 1"]
+	case n > 1:
+		f.PathIntro = fmt.Sprintf(docSentences["path intro n"], n)
 	}
 	f.InputCount = count(len(f.BodyInput))
 	if f.Method == "GET" && len(f.BodyInput) == 0 {
@@ -1176,9 +1199,18 @@ func (w *walker) finish() {
 			w.errs = append(w.errs, Refusal{Pos: token.Position{Filename: "runtime/httpx"}, Construct: "missing QueryInputRule or StrictQueryRule", Context: "H1 http plumbing", Hint: "runtime/httpx declares QueryInputRule and StrictQueryRule for GET slices"})
 		}
 		f.InputRule += " " + h.StrictQueryRule // T4
+	} else if len(f.BodyInput) == 0 {
+		f.InputIntro = ""
+		f.InputRule = ""
+		if len(f.PathInput) == 0 {
+			f.InputIntro = docSentences["get no input"]
+		}
 	} else {
 		f.InputIntro = "The request body is one JSON object with " + f.InputCount + " and no others:"
 		f.InputRule = h.InputRule
+		if len(f.PathInput) > 0 {
+			f.InputRule += " " + h.PathBodyRule
+		}
 	}
 	txRule := h.TxRule
 	if f.Method == "GET" {
@@ -1220,6 +1252,9 @@ func (w *walker) finish() {
 	}
 	if len(f.ServerSet) > 0 {
 		badWhen = fmt.Sprintf(docSentences["server set when"], badWhen, h.ServerSetWhen)
+	}
+	if len(f.PathInput) > 0 && h.PathBodyWhen != "" {
+		badWhen = fmt.Sprintf(docSentences["server set when"], badWhen, h.PathBodyWhen)
 	}
 	f.Answers = append(f.Answers, line(h.BadInput, badWhen))
 	if !f.Public && len(f.Roles) > 0 { // A3: Bind answers these before it reads the request

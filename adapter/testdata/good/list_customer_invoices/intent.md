@@ -13,8 +13,8 @@ when not signed in, HTTP 403 for any other role.
 ## Inputs
 - `customer_id` — path `{id}`; the customer whose invoices to list (must exist).
 - `after` — query; keyset cursor: only invoices with a lower `seq` than this.
-  Leave it out for the newest page; for the next page, send the previous
-  answer's `next_after`.
+  Leave it out, or send `0`, for the newest page; for the next page, send the
+  previous answer's `next_after`.
 - `limit` — query; page size, at most the domain's maximum page size; leave
   it out for the default page size (both in bridge-en's runtime/page).
 
@@ -30,7 +30,7 @@ in a read-only transaction, so creating invoices is not blocked by it.
 ## Failure cases
 - F1: the customer does not exist.
 - F2: `limit` is outside 1 to the maximum page size.
-- F3: `after` is zero or negative (omit it for the first page instead).
+- F3: `after` is negative (omit it, or send `0`, for the first page instead).
 
 ## Out of scope
 Creating, editing or voiding invoices; filtering by date or amount; OFFSET paging.
