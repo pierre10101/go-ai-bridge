@@ -1199,14 +1199,14 @@ func (w *walker) finish() {
 			w.errs = append(w.errs, Refusal{Pos: token.Position{Filename: "runtime/httpx"}, Construct: "missing QueryInputRule or StrictQueryRule", Context: "H1 http plumbing", Hint: "runtime/httpx declares QueryInputRule and StrictQueryRule for GET slices"})
 		}
 		f.InputRule += " " + h.StrictQueryRule // T4
-	} else if len(f.BodyInput) == 0 {
-		f.InputIntro = ""
-		f.InputRule = ""
-		if len(f.PathInput) == 0 {
-			f.InputIntro = docSentences["get no input"]
-		}
 	} else {
-		f.InputIntro = "The request body is one JSON object with " + f.InputCount + " and no others:"
+		// Non-GET always runs decode: the caller must send a JSON body
+		// ({} when there are no body fields). Path fields are never in it.
+		if len(f.BodyInput) == 0 {
+			f.InputIntro = docSentences["empty body"]
+		} else {
+			f.InputIntro = "The request body is one JSON object with " + f.InputCount + " and no others:"
+		}
 		f.InputRule = h.InputRule
 		if len(f.PathInput) > 0 {
 			f.InputRule += " " + h.PathBodyRule

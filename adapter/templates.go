@@ -248,6 +248,7 @@ var docSentences = map[string]string{
 	"no pre":          "None asserted.",
 	"get input":       "The request has no JSON body. It takes these values from the path and the query string:",
 	"get no input":    "The request has no JSON body and takes no value from the path or the query string.",
+	"empty body":      "The request body is one empty JSON object (`{}`).",
 	"path intro 1":    "The request takes this value from the path:",
 	"path intro n":    "The request takes these %d values from the path:",
 	"path field":      "`%s`, from the path (`{%s}`): %s.",

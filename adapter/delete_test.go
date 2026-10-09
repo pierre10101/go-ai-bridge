@@ -42,9 +42,31 @@ func TestDeleteEnglish(t *testing.T) {
 	if en, _ := Render(deleteEventFixture); !strings.Contains(en, "It reads table `events` and writes tables `events` and `sections`") {
 		t.Errorf("delete_event: the cascade's table is not among the writes:\n%s", en)
 	}
+	// Path-only DELETE: Bind still requires a JSON body ({}), and the English
+	// says so with InputRule and PathBodyRule (not GET's "no JSON body").
+	en, err := Render(inFixtureApp(t, deleteEventFixture, "delete_event",
+		"action.go", `const Route = "DELETE /events"`, `const Route = "DELETE /events/{id}"`,
+		"action.go", "EventID int64 `json:\"event_id\"`", "EventID int64 `json:\"event_id\" path:\"id\"`"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"The request takes this value from the path:\n- `event_id`, from the path (`{id}`): a whole number.\n",
+		"The request body is one empty JSON object (`{}`).\n" +
+			"Every field is required, also inside objects: a field that is left out, or is null, is answered with HTTP 400 below and the action does not run. " +
+			"A field taken from the path is not sent in the body: a body that carries it is answered with HTTP 400 below and the action does not run.\n",
+		"or the body carries a field that comes from the path. The action does not run.",
+	} {
+		if !strings.Contains(en, want) {
+			t.Errorf("path-only delete: want %q in:\n%s", want, en)
+		}
+	}
+	if strings.Contains(en, "The request has no JSON body") {
+		t.Errorf("path-only delete must not claim there is no JSON body:\n%s", en)
+	}
 	// A delete over a Q7 key list removes each listed row; S11 compares the
 	// number deleted with the length of the list.
-	en, err := Render(inFixtureApp(t, deleteSectionFixture, "delete_section",
+	en, err = Render(inFixtureApp(t, deleteSectionFixture, "delete_section",
 		"queries/delete_section.sql", "WHERE sections.id = sqlc.arg(id)\n  AND sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id));",
 		"WHERE sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id))\n  AND sections.id IN (sqlc.slice(ids));",
 		"action.go", "SectionID int64 `json:\"section_id\"`", "SectionIDs []int64 `json:\"section_ids\" list:\"1..10\"`",
