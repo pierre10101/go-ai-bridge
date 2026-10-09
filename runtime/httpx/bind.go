@@ -7,8 +7,9 @@
 //
 // bridge-en is built from the same module version and quotes the
 // declarations below (BadInput, Internal, SuccessStatus, InputRule,
-// QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ErrorBody, and ClockRule
-// in clock.go) to write the HTTP and transaction sentences of every slice's
+// QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ErrorBody, ClockRule in
+// clock.go, and SessionCookie, SessionRule, SessionValue and ServerSetWhen in
+// session.go) to write the HTTP and transaction sentences of every slice's
 // .en file. Bind answers only through them, and the tests in this package
 // prove each sentence, so the English cannot drift from what Bind does.
 package httpx
@@ -104,17 +105,20 @@ func Bind[I any, O any](handle func(context.Context, I) (O, error)) http.Handler
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer recoverViolation(w)
 		var in I
-		var msg string
-		if r.Method == http.MethodGet && hasParamTags[I]() {
-			in, msg = decodeParams[I](r)
-		} else {
-			in, msg = decode[I](w, r)
+		msg := serverSetSent[I](r) // ClockRule, SessionRule: never from the query string
+		if msg == "" {
+			if r.Method == http.MethodGet && hasParamTags[I]() {
+				in, msg = decodeParams[I](r)
+			} else {
+				in, msg = decode[I](w, r)
+			}
 		}
 		if msg != "" {
 			writeOutcome(w, BadInput, msg)
 			return
 		}
-		stampClock(&in) // ClockRule
+		stampClock(&in)      // ClockRule
+		stampSession(&in, r) // SessionRule
 		run := txn.Run[O]
 		if r.Method == http.MethodGet {
 			run = txn.Read[O] // ReadTxRule
@@ -199,11 +203,13 @@ func required(t reflect.Type, raw json.RawMessage, prefix string, missing *[]str
 			name = f.Name
 		}
 		names[name] = true
-		if isClockField(f) {
-			if _, sent := obj[name]; sent {
-				return fmt.Sprintf("field %q is set by the server (the current time); do not send it", prefix+name)
+		if isServerSet(f) {
+			for k := range obj {
+				if strings.EqualFold(k, name) { // encoding/json matches names in any case
+					return serverSetMessage(f, prefix+name)
+				}
 			}
-			continue // ClockRule: filled by stampClock, never required from the caller
+			continue // ClockRule, SessionRule: filled by Bind, never required from the caller
 		}
 		fields = append(fields, field{name, f.Type})
 	}

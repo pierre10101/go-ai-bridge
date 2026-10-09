@@ -28,7 +28,7 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Statements: S1-S10](#statements-s1-s10)
 - [Expressions: E1-E7](#expressions-e1-e7)
 - [SQL: Q0-Q6](#sql-q0-q6)
-- [Rules across statements: T1, W1](#rules-across-statements-t1-w1)
+- [Rules across statements: T1, T2, W1](#rules-across-statements-t1-t2-w1)
 - [Outside the slice: M1-M3, H1](#outside-the-slice-m1-m3-h1)
 - [Conditional claim and state-transition rules](#conditional-claim-and-state-transition-rules)
 - [Hard limits](#hard-limits)
@@ -46,17 +46,17 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.1.1
+go get github.com/pierre10101/go-ai-bridge@v0.1.2
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.1
-bridge-en -version                      # bridge-en 0.1.1
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.2
+bridge-en -version                      # bridge-en 0.1.2
 ```
 
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.1.1
+require github.com/pierre10101/go-ai-bridge v0.1.2
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -67,9 +67,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.1   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.2   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.1
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.2
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -79,14 +79,14 @@ Without GitHub Actions: `go install …@v<version>` as above, or download
 check the hash.
 
 **Why app pull requests cannot rewrite the English.** The English quotes the
-runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`),
+runtime (for example `httpx.InputRule`, `httpx.TxRule`, `httpx.ClockRule`, `httpx.SessionRule`),
 and the app runs that same runtime: both come from the one module version in
 `go.mod`, verified by the Go checksum database. The app has no copy to edit.
 `bridge-en -check` (and `-write`) first refuse an app whose `go.mod` requires
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.1; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.1), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.1.2; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.1.2), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
@@ -194,8 +194,11 @@ Refused: `const MaxRetries = 3` - `refused: constant declaration MaxRetries is n
 
 **input** - `type Input struct` with at most 10 fields, each `int64`, `string`,
 `bool` or `domain.<T>`, each with a json tag. Every field is required (left
-out or null is HTTP 400). Exception: one `int64` field tagged `clock:"now"`
-(T1) is set by the server. GET fields take `path:"<name>"` or `query:"<name>"`.
+out or null is HTTP 400). Exception, the **server-set inputs**: an `int64`
+field tagged `clock:"now"` (T1) and one `int64` or `string` field tagged
+`server:"session"` (T2) are set by the server; the caller must not send them
+(body or query string: HTTP 400), and the English lists them apart from the
+fields the caller sends. GET fields take `path:"<name>"` or `query:"<name>"`.
 
 ```go
 type Input struct {
@@ -375,7 +378,38 @@ if claimed != 1 {
 	return Output{}, F1
 }
 ```
-English: `3. If not exactly one seat was changed in step 2, stop with F1: HTTP 409 Conflict "seat is already held".` / `The write in step 2 is rolled back.`
+English: `3. If not exactly one seat was changed in step 2, stop with F1: HTTP 409 Conflict "seat is already held".` / `Any change made in step 2 is rolled back.`
+
+**What a stop says about the claim's write.** A claim may change no row, so
+"the write is rolled back" is only said where the claim did change one. Every
+step that can stop the action (a guard, a query that fails, an assertion)
+says, for each earlier write:
+
+| Where | English |
+|---|---|
+| an insert (Q3) before it; or a claim, after a guard that stops unless exactly one row changed (`!= 1`) or unless one did (`== 0`) | `The write in step 2 is rolled back.` |
+| a claim whose count is not known yet: a read right after it, or the `!= 1` guard itself (0 rows, or several) | `Any change made in step 2 is rolled back.` |
+| a guard whose condition includes `<n> == 0` (`claimed == 0 && ...`): it stops only when the claim changed nothing | `Nothing was written in step 2, so there is nothing to roll back.` |
+
+The failure index says the same per F-ID: `before any write`, `after a write
+that changed nothing, so nothing was written`, `after a write that may have
+changed rows; any change it made is rolled back`, or `after a write, which is
+rolled back`. From `adapter/testdata/good/release_example/release_example.en`:
+
+```
+3. Read: count the seats whose `id` is the request's `seat_id` (query `CountSeats` in queries/seat_after.sql). If the query fails, stop with HTTP 500 Internal Server Error.
+   Any change made in step 2 is rolled back.
+4. If no seat was changed in step 2 and no seat has `id` equal to the request's `seat_id`, stop with F2: HTTP 404 Not Found "seat does not exist".
+   Nothing was written in step 2, so there is nothing to roll back.
+...
+6. If not exactly one seat was changed in step 2, stop with F3: HTTP 409 Conflict "seat is not held by this session".
+   Any change made in step 2 is rolled back.
+...
+8. Check that:
+   - the found seat's `held_by` equals 0 and the found seat's `held_at` equals 0 ("nobody holds the seat any more")
+   If any of these is false, it is a bug: stop with HTTP 500 Internal Server Error.
+   The write in step 2 is rolled back.
+```
 
 Refused: no `!= 1` guard - `refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check)`; `claimed > 0` - `refused: comparison claimed > 0 on a claim's changed-row count is not in the allowed pattern list (S10 claim check)`
 
@@ -402,7 +436,11 @@ Refused: `1.5` - `refused: literal 1.5 is not in the allowed pattern list (expre
 ### E3
 
 **comparison** - `== != < <= > >=`. English: `equals`, `does not equal`,
-`is less than`, `is at most`, `is greater than`, `is at least`.
+`is less than`, `is at most`, `is greater than`, `is at least`. Against the
+current time on the right (`x <= in.Now`, or a domain function's
+`expiresAt <= now` called with `in.Now`), the Q6 boundary words instead:
+`is no later than`, `is earlier than`, `is later than`, `is no earlier than`,
+`is exactly`, `is not exactly` the current time.
 
 Refused: none of its own; operands follow E1-E7.
 
@@ -523,7 +561,11 @@ English: ``2. Claim: in table `seats`, set `held_by` = the request's `person_id`
 comparison is said as a distance, and every phrase names its boundary: a
 time exactly `d` away is inside "`d` or more", "no earlier than" and "no
 later than", outside "more than `d`", "later than" and "earlier than".
-`TestClockComparisonWording` and `TestClockComparisonTable` pin these lines;
+With no offset the same words compare with the current time itself: an
+`expires_at` equal to the current time is "no later than" and "no earlier
+than" it, and neither "earlier than" nor "later than" it.
+`TestClockComparisonWording`, `TestClockComparisonTable` and
+`TestClockComparisonWithoutOffset` pin these lines;
 the claim checks prove the `<=` boundary against SQLite (a hold taken 599
 seconds earlier blocks the seat, one taken exactly 600 seconds earlier does
 not).
@@ -539,6 +581,11 @@ not).
 | `ends_at > sqlc.arg(now) + 600` | `` `ends_at` is more than 10 minutes after the current time `` |
 | `ends_at < sqlc.arg(now) + 600` | `` `ends_at` is earlier than 10 minutes after the current time `` |
 | `ends_at <= sqlc.arg(now) + 600` | `` `ends_at` is no later than 10 minutes after the current time `` |
+| `expires_at <= sqlc.arg(now)` | `` `expires_at` is no later than the current time `` |
+| `expires_at < sqlc.arg(now)` | `` `expires_at` is earlier than the current time `` |
+| `expires_at > sqlc.arg(now)` | `` `expires_at` is later than the current time `` |
+| `expires_at >= sqlc.arg(now)` | `` `expires_at` is no earlier than the current time `` |
+| `expires_at = sqlc.arg(now)` / `<>` | `` `expires_at` is exactly the current time `` / `is not exactly` |
 
 Refused:
 - `UPDATE seats SET held_by = ?;` - `refused: end of statement ... Expected WHERE after SET (a claim names its rows and its condition; an UPDATE without WHERE changes every row)`
@@ -549,7 +596,7 @@ Refused:
 
 ---
 
-## Rules across statements: T1, W1
+## Rules across statements: T1, T2, W1
 
 ### T1
 
@@ -565,7 +612,8 @@ type Input struct {
 ```
 
 `httpx.Bind` sets it from the server clock (unix seconds) and refuses a
-request that sends it; checks call `Handle` with any `Now` they like, so
+request that sends it, in the body or the query string, in any letter case;
+checks call `Handle` with any `Now` they like, so
 "10 minutes later" is a test input, not a sleep. Next to the current time,
 a Q6 offset in seconds is said in minutes, hours or days.
 
@@ -580,6 +628,57 @@ Refused:
 - `import "time"` - `refused: import "time" is not in the allowed pattern list (T1 time is passed in). Logic never reads the clock. ...`
 - `now := time.Now().Unix()` - `refused: clock read time.Now().Unix is not in the allowed pattern list (T1 time is passed in)`
 - `Now string \`json:"now" clock:"now"\`` - `refused: clock field Now that is not int64 tagged clock:"now" ...`
+
+### T2
+
+**session is passed in** - the caller's identity is a server-set input, like
+the time. At most one Input field, `int64` or `string`, tagged
+`server:"session"`:
+
+```go
+type Input struct {
+	SeatID  int64 `json:"seat_id"`
+	Session int64 `json:"session" server:"session"`
+}
+```
+
+`httpx.Bind` (`runtime/httpx`) sets it from the cookie
+`httpx.SessionCookie`, which is always `bridge_session`:
+
+- exactly one `bridge_session` cookie whose value is a whole number from 1
+  up, in digits only (`int64`), or 1 to 128 letters, digits, `-`, `_` or `.`
+  (`string`): the field is that value;
+- no such cookie, more than one, or any other value: the field is 0 (the
+  empty text), and the action runs, so its own guard raises its failure
+  (`if in.Session <= 0 { return Output{}, F1 }`);
+- a request whose body or query string sends `session`, in any letter case,
+  is answered with HTTP 400 `bad_request` and the action does not run.
+
+Bind only reads the cookie: it never mints, signs or renews it and checks it
+against no store; whoever presents the value is that session. The app issues
+it (for example when it serves its web page) with an unguessable value,
+`HttpOnly`, `SameSite=Lax` and, over HTTPS, `Secure`. Checks call `Handle`
+with any session they like.
+
+English (`adapter/testdata/good/release_example/release_example.en`), apart
+from the fields the caller sends:
+```
+The request body is one JSON object with this field and no others:
+- `seat_id`: a whole number.
+...
+The action also takes this value, which the caller does not send:
+- `session`: set by the server from the session cookie `bridge_session`: its value when that is a whole number from 1 up, written in digits only, or 0 when the request has no such cookie, has it more than once, or its value is anything else; the caller does not send it, and a request that does is answered with HTTP 400 below.
+```
+the 400 answer adds `; or the request sends a value that the server sets, in
+the body or in the query string`, and in steps it is `the session from the
+cookie`: ``1. If the session from the cookie is at most 0, stop with F1: HTTP 401 Unauthorized "session is required".``
+
+Refused:
+- `Session int64 \`json:"session" server:"user"\`` - `refused: server field Session tagged server:"user" is not in the allowed pattern list (T2 session is passed in)`
+- `Session bool \`json:"session" server:"session"\`` - `refused: server field Session of type bool ...`
+- `Session int64 \`json:"session" query:"session" server:"session"\`` - `refused: server field Session with a path or query tag ...`
+- a `server` tag on Output - `refused: server tag on SeatID outside Input ...`
+- a second `server:"session"` field - `refused: second session field Other ...`
 
 ### W1
 
@@ -665,7 +764,8 @@ Refused: `seq+1` - `refused: arithmetic operator + is not in the allowed pattern
 
 **http plumbing** - `github.com/pierre10101/go-ai-bridge/runtime/httpx` declares
 `BadInput`, `Internal`, `SuccessStatus`, `InputRule`, `QueryInputRule`,
-`BadQueryWhen`, `TxRule`, `ReadTxRule`, `ClockRule` and `ErrorBody`;
+`BadQueryWhen`, `TxRule`, `ReadTxRule`, `ClockRule`, `SessionCookie`,
+`SessionRule`, `SessionValue`, `ServerSetWhen` and `ErrorBody`;
 `bridge-en` quotes the values compiled into it, which are the app's because
 `go.mod` pins the same version (the pin check above), and httpx's own tests
 prove each one. `cmd/server` binds every route with the runtime's
@@ -685,7 +785,8 @@ condition holds at that moment: claiming a resource, confirming or releasing
 a hold, approving a request, consuming a one-time token. The seat hold in
 `adapter/testdata/good/claim_example` is only an example.
 
-1. **Pass the current time in** (T1). No clock inside logic. A time
+1. **Pass the current time and the session in** (T1, T2). No clock inside
+   logic, and the caller never names who they are in the body. A time
    condition is written next to the server-set `now`, and the English names
    its boundary exactly (Q6 table): `held_at <= sqlc.arg(now) - 600` is
    "`held_at` is 10 minutes or more before the current time", so a hold taken
@@ -709,7 +810,8 @@ a hold, approving a request, consuming a one-time token. The seat hold in
 
    Each becomes an F-ID raised by a guard after the claim (`claimed == 0 && ...`
    reads that explain why nothing changed, allowed by W1), with the final
-   `claimed != 1` guard as the catch-all (S10).
+   `claimed != 1` guard as the catch-all (S10). The English of a
+   `claimed == 0 && ...` guard says nothing was written (S10).
 
 ## Hard limits
 

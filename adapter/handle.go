@@ -141,7 +141,10 @@ func (w *walker) claimCond(c sqlCond, vals map[string]string, table string) stri
 		}
 		return fmt.Sprintf(t("paren"), strings.Join(parts, " or "))
 	}
-	if v := c.Val; v.Kind == "param" && v.Op != "" && vals[v.Param] == t("clock") {
+	if v := c.Val; v.Kind == "param" && vals[v.Param] == t("clock") {
+		if v.Op == "" {
+			return clockNow("`"+c.Col+"`", c.Op)
+		}
 		n, _ := strconv.Atoi(v.Off)
 		return clockComparison(c.Col, c.Op, v.Op, n)
 	}
@@ -166,6 +169,27 @@ func (w *walker) claimCond(c sqlCond, vals map[string]string, table string) stri
 // every time on the other side of now (RULEBOOK.md, Q6).
 func clockComparison(col, op, sign string, seconds int) string {
 	return fmt.Sprintf(t("clock "+sign+" "+op), col, clockAmount(seconds), t("clock"))
+}
+
+// clockNow renders <value> <op> <now> with no offset in the same boundary
+// words as clockComparison, so "no later than" includes the current time
+// itself and "earlier than" does not:
+//
+//	col <= now   col is no later than the current time
+//	col <  now   col is earlier than the current time
+//	col >  now   col is later than the current time
+//	col >= now   col is no earlier than the current time
+//	col =  now   col is exactly the current time (<>: is not exactly)
+//
+// op is SQL (=, <>) or Go (==, !=); value is already rendered.
+func clockNow(value, op string) string {
+	switch op {
+	case "==":
+		op = "="
+	case "!=":
+		op = "<>"
+	}
+	return fmt.Sprintf(t("clock "+op), value, t("clock"))
 }
 
 // offsetPhrase renders a Q6 value "<parameter> + n" or "- n" (in SET). Next
@@ -268,10 +292,10 @@ func (w *walker) addStep(kind, text string) *Step {
 }
 
 // notes adds what a reader must know about a step that may stop the action:
-// assertions inside domain calls and the earlier writes that are rolled back.
+// assertions inside domain calls and what happens to the earlier writes.
 func (w *walker) notes(s *Step, stops bool) {
 	if w.domainNote(s) || stops {
-		w.rolledBack(s)
+		w.rolledBack(s, w.wrote)
 	}
 }
 
@@ -295,15 +319,146 @@ func (w *walker) domainNote(s *Step) bool {
 	return true
 }
 
-// rolledBack: every query runs in the call's one transaction (TxRule), and a
-// step that stops the action rolls it back, so earlier writes do not stay.
-func (w *walker) rolledBack(s *Step) {
-	switch len(w.writes) {
-	case 0:
-	case 1:
-		s.Notes = append(s.Notes, fmt.Sprintf(st("rolled back 1"), w.writes[0]))
-	default:
-		s.Notes = append(s.Notes, fmt.Sprintf(st("rolled back n"), joinInts(w.writes)))
+// What a write step may have changed by the time a later step stops the
+// action. Every query runs in the call's one transaction (TxRule) and a step
+// that stops the action rolls it back, so the English says, per earlier
+// write, whether a change is rolled back, may be, or was never made:
+//
+//   - wroteSome: it changed rows. An insert (Q3) that succeeded always did;
+//     a claim (Q6) did once a guard has stopped unless exactly one row (or
+//     unless any row) changed. "The write in step N is rolled back."
+//   - wroteMaybe: a claim whose changed-row count is not known at this step,
+//     e.g. a read right after it, or the S10 guard "not exactly one" itself
+//     (0 rows, or several). "Any change made in step N is rolled back."
+//   - wroteNone: a claim that changed no row: only at a guard whose condition
+//     includes "no <row> was changed in step N" (`n == 0 && ...`). Nothing
+//     is rolled back, so the English says "Nothing was written in step N."
+const (
+	wroteNone  = "none"
+	wroteMaybe = "maybe"
+	wroteSome  = "some"
+)
+
+// The failure index ranks a failure case by the worst state of the writes
+// before any of its steps.
+const (
+	whenBefore = iota // no write before it
+	whenNone          // only writes that changed nothing
+	whenMaybe         // a write that may have changed rows
+	whenSome          // a write that changed rows
+)
+
+var whenOf = map[string]int{wroteNone: whenNone, wroteMaybe: whenMaybe, wroteSome: whenSome}
+
+// whenAt is the worst write state in states (whenBefore without writes).
+func (w *walker) whenAt(states map[int]string) int {
+	when := whenBefore
+	for _, n := range w.writes {
+		if v := whenOf[states[n]]; v > when {
+			when = v
+		}
+	}
+	return when
+}
+
+// rolledBack states, for a step that may stop the action, what happens to
+// each earlier write (see wroteSome, wroteMaybe, wroteNone).
+func (w *walker) rolledBack(s *Step, states map[int]string) {
+	var some, maybe, none []int
+	for _, n := range w.writes {
+		switch states[n] {
+		case wroteSome:
+			some = append(some, n)
+		case wroteMaybe:
+			maybe = append(maybe, n)
+		case wroteNone:
+			none = append(none, n)
+		}
+	}
+	for _, g := range []struct {
+		steps     []int
+		one, many string
+	}{
+		{some, "rolled back 1", "rolled back n"},
+		{maybe, "maybe rolled back 1", "maybe rolled back n"},
+		{none, "nothing written 1", "nothing written n"},
+	} {
+		switch len(g.steps) {
+		case 0:
+		case 1:
+			s.Notes = append(s.Notes, fmt.Sprintf(st(g.one), g.steps[0]))
+		default:
+			s.Notes = append(s.Notes, fmt.Sprintf(st(g.many), joinInts(g.steps)))
+		}
+	}
+}
+
+// conjuncts splits a condition at its top-level && (through parentheses).
+func conjuncts(e ast.Expr) []ast.Expr {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return conjuncts(x.X)
+	case *ast.BinaryExpr:
+		if x.Op == token.LAND {
+			return append(conjuncts(x.X), conjuncts(x.Y)...)
+		}
+	}
+	return []ast.Expr{e}
+}
+
+// changedCheck matches <n> <op> <int> on a claim's changed-row count (S10).
+func (w *walker) changedCheck(e ast.Expr) (*local, token.Token, string) {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		e = p.X
+	}
+	b, ok := e.(*ast.BinaryExpr)
+	if !ok {
+		return nil, 0, ""
+	}
+	id, ok1 := b.X.(*ast.Ident)
+	lit, ok2 := b.Y.(*ast.BasicLit)
+	if !ok1 || !ok2 || lit.Kind != token.INT {
+		return nil, 0, ""
+	}
+	loc := w.locals[id.Name]
+	if loc == nil || loc.kind != "changed" {
+		return nil, 0, ""
+	}
+	return loc, b.Op, lit.Value
+}
+
+// stopStates is what the writes changed when guard condition cond is true:
+// a conjunct "<n> == 0" means that claim changed no row, "<n> == 1" that it
+// changed one. Anything else (|| , !, "<n> != 1") tells nothing new.
+func (w *walker) stopStates(cond ast.Expr) map[int]string {
+	states := make(map[int]string, len(w.wrote))
+	for k, v := range w.wrote {
+		states[k] = v
+	}
+	for _, c := range conjuncts(cond) {
+		loc, op, v := w.changedCheck(c)
+		switch {
+		case loc == nil:
+		case op == token.EQL && v == "0":
+			states[loc.step] = wroteNone
+		case op == token.EQL && v == "1":
+			states[loc.step] = wroteSome
+		}
+	}
+	return states
+}
+
+// passGuard records what is known once guard condition cond was false: after
+// "if <n> != 1 { stop }" exactly one row changed, after "if <n> == 0 { stop }"
+// at least one did.
+func (w *walker) passGuard(cond ast.Expr) {
+	loc, op, v := w.changedCheck(cond)
+	if loc != nil && ((op == token.NEQ && v == "1") || (op == token.EQL && v == "0")) {
+		w.wrote[loc.step] = wroteSome
 	}
 }
 
@@ -360,7 +515,7 @@ func (w *walker) post(s ast.Stmt) {
 	} else {
 		step = w.addStep("post", st("post"))
 		step.Notes = append(step.Notes, fmt.Sprintf(st("post note"), w.internal()))
-		w.rolledBack(step)
+		w.rolledBack(step, w.wrote)
 		w.f.assertSteps = appendInt(w.f.assertSteps, step.N)
 	}
 	step.Bullets = append(step.Bullets, text)
@@ -375,13 +530,16 @@ func (w *walker) guard(s *ast.IfStmt) {
 	w.inGuard = false
 	step := w.addStep("guard", fmt.Sprintf(st("guard"), cond, fc.ID, statusPhrase(fc.Status), fc.Message))
 	fc.steps = append(fc.steps, step.N)
-	if len(w.writes) > 0 {
-		fc.afterWrite = true
+	stop := w.stopStates(s.Cond)
+	if when := w.whenAt(stop); when > fc.when {
+		fc.when = when
 	}
 	if hasCallTo(s.Cond, pageLimitCall) {
 		w.f.pageLimitGuarded = true
 	}
-	w.notes(step, true)
+	w.domainNote(step)
+	w.rolledBack(step, stop)
+	w.passGuard(s.Cond)
 }
 
 func (w *walker) query(s *ast.AssignStmt) {
@@ -492,6 +650,10 @@ func (w *walker) query(s *ast.AssignStmt) {
 	}
 	if len(q.Writes) > 0 {
 		w.writes = append(w.writes, step.N)
+		w.wrote[step.N] = wroteSome // an insert that succeeded stored its row
+		if q.Shape == "claim" {
+			w.wrote[step.N] = wroteMaybe // until a guard checks how many rows changed (S10)
+		}
 		if w.f.Method == "GET" {
 			w.refuse(s, "write query "+q.Name+" in a GET action", "S3 query", "A GET runs in a read-only transaction (ReadTxRule); writes belong in a POST action")
 		}
@@ -705,10 +867,7 @@ func (w *walker) finish() {
 		if len(fc.steps) > 1 {
 			where = fmt.Sprintf(docSentences["steps"], joinInts(fc.steps))
 		}
-		when := docSentences["before write"]
-		if fc.afterWrite {
-			when = docSentences["after write"]
-		}
+		when := docSentences[[]string{"before write", "after no write", "after maybe write", "after write"}[fc.when]]
 		fc.Line = fmt.Sprintf(docSentences["failure index"], fc.ID, fc.Message, statusPhrase(fc.Status), where, when)
 		if w.f.Method == "GET" {
 			fc.Line = fmt.Sprintf(docSentences["read index"], fc.ID, fc.Message, statusPhrase(fc.Status), where)
@@ -725,14 +884,17 @@ func (w *walker) finish() {
 		return fmt.Sprintf(docSentences["fields many"], n)
 	}
 	for _, in := range f.Input {
-		if in.Clock {
-			f.Clock = append(f.Clock, in)
+		if in.ServerSet != "" {
+			f.ServerSet = append(f.ServerSet, in)
 		} else {
 			f.BodyInput = append(f.BodyInput, in)
 		}
 	}
-	if len(f.Clock) > 0 {
-		f.ClockIntro = docSentences["clock intro"]
+	switch n := len(f.ServerSet); {
+	case n == 1:
+		f.ServerIntro = docSentences["server intro 1"]
+	case n > 1:
+		f.ServerIntro = fmt.Sprintf(docSentences["server intro n"], n)
 	}
 	f.InputCount = count(len(f.BodyInput))
 	if f.Method == "GET" {
@@ -779,6 +941,9 @@ func (w *walker) finish() {
 	badWhen := h.BadInput.When
 	if f.Method == "GET" && h.BadQueryWhen != "" {
 		badWhen = h.BadQueryWhen
+	}
+	if len(f.ServerSet) > 0 {
+		badWhen = fmt.Sprintf(docSentences["server set when"], badWhen, h.ServerSetWhen)
 	}
 	f.Answers = append(f.Answers, line(h.BadInput, badWhen))
 	sort.Ints(statuses)

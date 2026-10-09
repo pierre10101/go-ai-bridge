@@ -21,7 +21,7 @@ import (
 type Field struct {
 	Name, JSON, Type, Line string
 	Domain                 string // domain type name, for domain.<T> fields
-	Clock                  bool   // T1: `clock:"now"`, filled by httpx from the server clock
+	ServerSet              string // "clock" (T1, `clock:"now"`) or "session" (T2, `server:"session"`): filled by httpx, never sent
 }
 
 // FailureCase is a D6 declaration plus every S2 guard that raises it.
@@ -30,7 +30,7 @@ type FailureCase struct {
 	Status                        int
 	pos                           token.Position
 	steps                         []int
-	afterWrite                    bool
+	when                          int // the worst of its steps: whenBefore .. whenWrote (see handle.go)
 }
 
 // QueryCall is one S3 statement.
@@ -52,8 +52,8 @@ type Step struct {
 type Feature struct {
 	Dir, Package, Title, Method, Path                          string
 	Input, Output                                              []Field
-	BodyInput, Clock                                           []Field // Input split: sent by the caller / set by the server (T1)
-	ClockIntro                                                 string
+	BodyInput, ServerSet                                       []Field // Input split: sent by the caller / set by the server (T1, T2)
+	ServerIntro                                                string
 	InputCount, InputIntro, InputRule, ErrorShape, SuccessLine string
 	DataLine, NoPre, InternalStatus, TxLine                    string
 	Answers                                                    []string
@@ -91,6 +91,7 @@ type walker struct {
 	fids    map[string]*FailureCase
 	pkgs    map[string]bool
 	writes  []int          // step numbers of writes so far
+	wrote   map[int]string // write step -> what it may have changed by now: wroteSome or wroteMaybe
 	readAt  map[string]int // W1: table -> step of the first read query (Q1, Q2, Q5) of it
 	inGuard bool           // rendering an S2 guard condition (S10 marks its claim checked)
 	asserts []string       // domain assertions met while rendering the current statement
@@ -131,7 +132,7 @@ func ParseAction(dir string) (*Feature, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &walker{fset: fset, env: e, f: &Feature{Dir: dir, env: e}, fids: map[string]*FailureCase{}, pkgs: map[string]bool{}, readAt: map[string]int{}}
+	w := &walker{fset: fset, env: e, f: &Feature{Dir: dir, env: e}, fids: map[string]*FailureCase{}, pkgs: map[string]bool{}, readAt: map[string]int{}, wrote: map[int]string{}}
 	w.errs = append(w.errs, sqlErrs...)
 	w.decls(file)
 	if len(w.errs) > 0 {
@@ -292,7 +293,7 @@ func (w *walker) fields(ts *ast.TypeSpec, ctx string, limit bool) []Field {
 			continue
 		}
 		line := fmt.Sprintf(docSentences["field"], tag, typ)
-		clock := false
+		server := ""
 		if c := structTag(fl.Tag, "clock"); c != "" {
 			switch {
 			case ctx != "D4 input":
@@ -301,14 +302,40 @@ func (w *walker) fields(ts *ast.TypeSpec, ctx string, limit bool) []Field {
 				w.refuse(fl, "clock field "+name+" that is not int64 tagged clock:\"now\"", "T1 time is passed in",
 					"Write: Now int64 `json:\"now\" clock:\"now\"` (whole seconds since 1970-01-01 UTC, set by the server)")
 			}
-			clock = true
+			server = "clock"
 			line = fmt.Sprintf(docSentences["field"], tag, w.env.http.ClockRule)
-		} else if p := structTag(fl.Tag, "path"); p != "" {
+		}
+		if sv := structTag(fl.Tag, "server"); sv != "" {
+			typName := types.ExprString(fl.Type)
+			value, typed := w.env.http.SessionValue[typName]
+			switch {
+			case ctx != "D4 input":
+				w.refuse(fl, "server tag on "+name+" outside Input", "T2 session is passed in", "Only an Input field can be set by the server")
+			case server != "":
+				w.refuse(fl, "field "+name+" tagged both clock and server", "T2 session is passed in", "A server-set field is either the current time (T1) or the session (T2)")
+			case sv != "session":
+				w.refuse(fl, "server field "+name+" tagged server:"+strconv.Quote(sv), "T2 session is passed in", sessionHint)
+			case !typed:
+				w.refuse(fl, "server field "+name+" of type "+typName, "T2 session is passed in", sessionHint)
+			case structTag(fl.Tag, "path") != "" || structTag(fl.Tag, "query") != "":
+				w.refuse(fl, "server field "+name+" with a path or query tag", "T2 session is passed in", "The session comes from the cookie only; drop the path/query tag")
+			}
+			for _, prev := range out {
+				if prev.ServerSet == "session" {
+					w.refuse(fl, "second session field "+name, "T2 session is passed in", "An Input has at most one server:\"session\" field")
+				}
+			}
+			server = "session"
+			line = fmt.Sprintf(docSentences["field"], tag, strings.NewReplacer("{valid}", value.Valid, "{zero}", value.Zero).Replace(w.env.http.SessionRule))
+		}
+		switch p := structTag(fl.Tag, "path"); {
+		case server != "": // T1/T2: the line says how the server sets it
+		case p != "":
 			line = fmt.Sprintf(docSentences["path field"], tag, p, typ)
-		} else if structTag(fl.Tag, "query") != "" {
+		case structTag(fl.Tag, "query") != "":
 			line = fmt.Sprintf(docSentences["query field"], tag, typ)
 		}
-		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, Clock: clock})
+		out = append(out, Field{Name: name, JSON: tag, Type: typ, Domain: dom, Line: line, ServerSet: server})
 	}
 	if limit && len(out) > MaxInputFields {
 		w.refuse(ts, fmt.Sprintf("Input with %d fields", len(out)), "hard limit", fmt.Sprintf("At most %d fields", MaxInputFields))

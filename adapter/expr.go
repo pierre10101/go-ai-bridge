@@ -39,7 +39,11 @@ func (w *walker) cond(e ast.Expr) string {
 			if types.ExprString(e.Y) == "nil" && (e.Op == token.EQL || e.Op == token.NEQ) {
 				return fmt.Sprintf(t(e.Op.String()+" nil"), w.value(e.X))
 			}
-			return fmt.Sprintf(t(e.Op.String()), w.value(e.X), w.value(e.Y))
+			x, y := w.value(e.X), w.value(e.Y)
+			if y == t("clock") && x != t("clock") {
+				return clockNow(x, e.Op.String()) // T1: the same boundary words as Q6
+			}
+			return fmt.Sprintf(t(e.Op.String()), x, y)
 		}
 	case *ast.CallExpr:
 		if w.isPageLimitCall(e) {
@@ -300,8 +304,8 @@ func (w *walker) selector(e *ast.SelectorExpr) (string, bool) {
 		}
 		if loc.kind == "request" && len(path) == 1 {
 			for _, f := range fields {
-				if f.Name == path[0] && f.Clock {
-					return t("clock"), true
+				if f.Name == path[0] && f.ServerSet != "" {
+					return t(f.ServerSet), true // "the current time" (T1), "the session" (T2)
 				}
 			}
 		}
@@ -418,7 +422,21 @@ func (w *walker) domainCall(c *ast.CallExpr, negated bool) string {
 			w.refuse(c, "domain."+name+", whose body never reads "+p, "M2 domain function", "Every argument appears in the English; drop the unused parameter")
 			return "?"
 		}
+		if args[i] == t("clock") {
+			phrase = clockArg(phrase, ph) // T1: the same boundary words as Q6
+		}
 		phrase = strings.ReplaceAll(phrase, ph, args[i])
+	}
+	return phrase
+}
+
+// clockArg rewrites the comparisons of a domain function's English whose
+// right operand is the parameter placeholder ph, when the call passes the
+// current time for it: "{e} is at most {now}" becomes "{e} is no later than
+// {now}", and so on for every operator (see clockNow).
+func clockArg(phrase, ph string) string {
+	for goOp, sqlOp := range map[string]string{"==": "=", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="} {
+		phrase = strings.ReplaceAll(phrase, fmt.Sprintf(t(goOp), "", ph), fmt.Sprintf(t("clock "+sqlOp), "", ph))
 	}
 	return phrase
 }

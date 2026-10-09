@@ -28,7 +28,7 @@ func hasParamTags[I any]() bool {
 	}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		if f.Tag.Get("path") != "" || f.Tag.Get("query") != "" {
+		if f.Tag.Get("path") != "" || f.Tag.Get("query") != "" || isServerSet(f) {
 			return true
 		}
 	}
@@ -48,8 +48,8 @@ func decodeParams[I any](r *http.Request) (I, string) {
 			continue
 		}
 		fv := v.Field(i)
-		if isClockField(f) {
-			continue // ClockRule: stampClock fills it after decoding
+		if isServerSet(f) {
+			continue // ClockRule, SessionRule: Bind fills it after decoding
 		}
 		if pathName := f.Tag.Get("path"); pathName != "" {
 			raw := r.PathValue(pathName)

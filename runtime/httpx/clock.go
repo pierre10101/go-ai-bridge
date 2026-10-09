@@ -13,15 +13,11 @@ import (
 // calling Handle directly, and the English can say what a time rule means.
 const ClockRule = "set by the server to the current time when the request arrives, in whole seconds since 1970-01-01 UTC; the caller does not send it, and a request that does is answered with HTTP 400 below"
 
+// The other server-set input, `server:"session"` (T2), is in session.go.
+
 // Now is the server clock behind every `clock:"now"` field. It is the only
 // clock read on the request path; tests replace it to inject a time.
 var Now = time.Now
-
-// clockTag is the struct tag that marks a server-set time field.
-const clockTag = "clock"
-
-// isClockField reports whether f is filled by the server clock.
-func isClockField(f reflect.StructField) bool { return f.Tag.Get(clockTag) != "" }
 
 // stampClock sets every `clock:"now"` int64 field of *in to Now() in unix
 // seconds. Any other clock field is a bug in the slice (bridge-en refuses it
@@ -33,7 +29,7 @@ func stampClock[I any](in *I) {
 	}
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Type().Field(i)
-		if !isClockField(f) {
+		if f.Tag.Get(clockTag) == "" {
 			continue
 		}
 		assert.Pre(f.Tag.Get(clockTag) == "now" && f.Type.Kind() == reflect.Int64, "a clock field is int64 tagged clock:\"now\"")

@@ -10,6 +10,8 @@ import (
 	createdb "example.com/fixtures/features/create_invoice/db"
 	"example.com/fixtures/features/list_customer_invoices"
 	listdb "example.com/fixtures/features/list_customer_invoices/db"
+	"example.com/fixtures/features/release_example"
+	releasedb "example.com/fixtures/features/release_example/db"
 	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 	"github.com/pierre10101/go-ai-bridge/runtime/txn"
 )
@@ -21,5 +23,6 @@ func Routes(db *sql.DB) http.Handler {
 	mux.Handle(claim_example.Route, httpx.Bind(claim_example.New(claimdb.New(txn.DB(db))).Handle))
 	mux.Handle(create_invoice.Route, httpx.Bind(create_invoice.New(createdb.New(txn.DB(db))).Handle))
 	mux.Handle(list_customer_invoices.Route, httpx.Bind(list_customer_invoices.New(listdb.New(txn.DB(db))).Handle))
+	mux.Handle(release_example.Route, httpx.Bind(release_example.New(releasedb.New(txn.DB(db))).Handle))
 	return mux
 }

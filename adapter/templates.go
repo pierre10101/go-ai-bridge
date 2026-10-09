@@ -35,6 +35,7 @@ var exprTemplates = map[string]string{
 	"request":       "the request",
 	"request field": "the request's `%s`",
 	"clock":         "the current time",
+	"session":       "the session from the cookie",
 	"context":       "the request context",
 	"action":        "the action",
 	"queries":       "the database access",
@@ -84,14 +85,23 @@ var exprTemplates = map[string]string{
 	"clock + >":  "`%s` is more than %s after %s",
 	"clock + <":  "`%s` is earlier than %s after %s",
 	"clock + <=": "`%s` is no later than %s after %s",
-	"seconds":    "%d seconds",
-	"minutes":    "%d minutes",
-	"hours":      "%d hours",
-	"days":       "%d days",
-	"1 second":   "1 second",
-	"1 minute":   "1 minute",
-	"1 hour":     "1 hour",
-	"1 day":      "1 day",
+
+	// The same with no offset: the value against the current time itself.
+	"clock =":  "%s is exactly %s",
+	"clock <>": "%s is not exactly %s",
+	"clock <=": "%s is no later than %s",
+	"clock <":  "%s is earlier than %s",
+	"clock >":  "%s is later than %s",
+	"clock >=": "%s is no earlier than %s",
+
+	"seconds":  "%d seconds",
+	"minutes":  "%d minutes",
+	"hours":    "%d hours",
+	"days":     "%d days",
+	"1 second": "1 second",
+	"1 minute": "1 minute",
+	"1 hour":   "1 hour",
+	"1 day":    "1 day",
 	// Q6 claim results (S10) in conditions and values.
 	"changed none":    "no %s was changed in step %d",
 	"changed one":     "exactly one %s was changed in step %d",
@@ -156,6 +166,14 @@ var stepTemplates = map[string]string{
 	"assertion":      "%s (%q)",
 	"quoted":         "%q",
 	"params":         "the values for query `%s`",
+
+	// A claim (Q6) whose changed-row count is not known at this step, and a
+	// claim that a guard's condition says changed nothing (see wroteMaybe,
+	// wroteNone in handle.go).
+	"maybe rolled back 1": "Any change made in step %d is rolled back.",
+	"maybe rolled back n": "Any changes made in steps %s are rolled back.",
+	"nothing written 1":   "Nothing was written in step %d, so there is nothing to roll back.",
+	"nothing written n":   "Nothing was written in steps %s, so there is nothing to roll back.",
 }
 
 // Contract and index sentences.
@@ -191,7 +209,14 @@ var docSentences = map[string]string{
 	"read index":      "%s %q: HTTP %s; %s.",
 	"before write":    "before any write",
 	"after write":     "after a write, which is rolled back",
-	"clock intro":     "The action also takes this value, which the caller does not send:",
+
+	// What a claim that may have changed nothing leaves (see handle.go), and
+	// the inputs the server sets (T1, T2).
+	"after maybe write": "after a write that may have changed rows; any change it made is rolled back",
+	"after no write":    "after a write that changed nothing, so nothing was written",
+	"server intro 1":    "The action also takes this value, which the caller does not send:",
+	"server intro n":    "The action also takes these %d values, which the caller does not send:",
+	"server set when":   "%s; or %s",
 }
 
 // docTemplate renders one slice in a fixed layout: contract (with every HTTP
@@ -207,9 +232,9 @@ The action "{{.Title}}" answers {{.Method}} {{.Path}}.
 {{.InputIntro}}
 {{range .BodyInput}}- {{.Line}}
 {{end}}{{.InputRule}}
-{{if .Clock}}
-{{.ClockIntro}}
-{{range .Clock}}- {{.Line}}
+{{if .ServerSet}}
+{{.ServerIntro}}
+{{range .ServerSet}}- {{.Line}}
 {{end}}{{end}}
 Every answer is JSON. An error answer is ` + "`{{.ErrorShape}}`" + `.
 - {{.SuccessLine}}

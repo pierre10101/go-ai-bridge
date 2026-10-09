@@ -21,9 +21,9 @@ copies no bridge-en source, and this repository ships no app.
 In the app (its `go.mod` is the pin):
 
 ```sh
-go get github.com/pierre10101/go-ai-bridge@v0.1.1
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.1
-bridge-en -version        # bridge-en 0.1.1
+go get github.com/pierre10101/go-ai-bridge@v0.1.2
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.1.2
+bridge-en -version        # bridge-en 0.1.2
 ```
 
 Install the binary of the version `go.mod` requires: `bridge-en -check` and
@@ -62,9 +62,9 @@ Then write slices under `features/` (see
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.1
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.1.2
   # with:
-  #   version: v0.1.1            # default: the version go.mod requires (go list -m)
+  #   version: v0.1.2            # default: the version go.mod requires (go list -m)
   #   method: release            # download the released binary, checked with SHA256, instead of go install
   #   working-directory: .       # the app's module root
 - run: bridge-en -check features/*/
@@ -100,7 +100,8 @@ adapter/                  the compiler: grammar.go (the pattern list), templates
 adapter/testdata/         a parse-only fixture app (module example.com/fixtures, see its go.mod):
   good/                     slices that render, each with its golden <slice>.en and checks:
                             claim_example (conditional claim), create_invoice (insert),
-                            list_customer_invoices (keyset page)
+                            list_customer_invoices (keyset page), release_example
+                            (session from the cookie; what a stop says about a claim's write)
   bad/                      deliberate rule breaks and their exact refusals (want.err)
   internal/domain/, schema.sql, cmd/server/   the fixture app's domain, schema and routes
 runtime/                  the runtime apps import: assert, failure, httpx, page, shape, store, txn
@@ -131,14 +132,16 @@ Run everything: `./scripts/ci.sh`, then `./scripts/smoke-app.sh` (needs sqlc:
 | Test | Proves |
 |---|---|
 | `adapter TestGoldenEnglish` | each `testdata/good/<slice>` renders to its committed `<slice>.en`, byte for byte |
-| `adapter TestClockComparisonWording`, `TestClockComparisonTable` | the exact English of `<=`, `<`, `>`, `>=` (and `=`, `<>`) against the current time, before and after |
+| `adapter TestClockComparisonWording`, `TestClockComparisonTable`, `TestClockComparisonWithoutOffset`, `TestClockArgInDomainCall` | the exact English of `<=`, `<`, `>`, `>=` (and `=`, `<>`) against the current time, before, after and with no offset |
+| `adapter TestSessionContract`, `TestSessionRules` | a `server:"session"` input is listed apart from the body fields with `httpx.SessionRule`; other shapes are refused (T2) |
+| `adapter TestRollbackWording` | a stop says "The write in step N is rolled back" only where a write changed rows; "Any change made" while a claim's count is unknown; "Nothing was written" under `claimed == 0` |
 | `adapter TestRefusesDeliberateRuleBreaks` | each `testdata/bad/*` is refused with exactly its `want.err` (retry loop, hidden magic, SQL shapes, check-then-write, unchecked claim, clock inside) |
 | `adapter TestRefusalsInHandle`, `TestSQLShapes`, `TestClaimRules`, `TestDomainUnderGrammar` | single constructs outside the grammar are refused with file:line:col |
 | `adapter TestRulebook` | intent.md F-IDs = action F-IDs = covered F-IDs; no dead SQL; routes bound via the runtime's httpx.Bind over txn.DB |
 | `adapter TestBoundNeedsTxn` | a route over a plain `*sql.DB`, or through an app's own httpx, is refused |
 | `adapter TestCheckPin`, `TestFixtureAppPinsThisVersion` | `-check` refuses a `go.mod` that pins another version, or none |
 | `adapter TestRulebookCoversGrammar` | RULEBOOK.md has exactly one section per grammar rule |
-| `runtime/httpx Test*` (incl. `TestClockRule*`, `TestTx*`) | every HTTP and transaction sentence the English quotes |
+| `runtime/httpx Test*` (incl. `TestClockRule*`, `TestSessionRule*`, `TestServerSet*`, `TestTx*`) | every HTTP and transaction sentence the English quotes |
 | `runtime/{assert,page,shape,store} Test*` | the other runtime primitives the English relies on |
 | `testdata/good/*/checks` (run by `smoke-app.sh`) | each fixture failure case fires and writes nothing; the claim's 599/600-second boundary |
 
