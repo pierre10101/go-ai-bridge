@@ -152,6 +152,23 @@ internal/domain/             the app's value objects and pure rules (M1-M3); may
 `httpx` and `txn` in `routes.go` are `github.com/pierre10101/go-ai-bridge/runtime/httpx`
 and `.../runtime/txn`; `store` is `.../runtime/store`.
 
+`store.Open` opens SQLite with `foreign_keys(1)` and `busy_timeout(5000)`
+(both required for the grammar's ON DELETE CASCADE/RESTRICT sentences and
+for one writer). A foreign-key or CHECK violation then fails the query and
+is answered as HTTP 500 (`internal`), same as any other query error: design
+actions so a valid request cannot hit a constraint (count first, claim
+with the condition, or omit `REFERENCES` to a non-domain identity table
+when a soft zero id is intentional — document that choice in `schema.sql`).
+
+`store.Open` applies `schema.sql` with whatever SQL you embed — typically
+`CREATE TABLE IF NOT EXISTS` — so **it does not migrate** an existing file
+when you rename or drop a column. Schema evolution is the app's: a small
+`migrate(db)` (shape probes with `PRAGMA table_info`, `ALTER TABLE … ADD
+COLUMN`, backfill, optional `DROP COLUMN`) run once before serving, or a
+version stamp table you check at startup. Put that beside `cmd/server`,
+outside `features/`; `-check` does not read it. Changing a foreign key on
+SQLite usually means rebuilding the table.
+
 A slice:
 
 ```
@@ -1481,7 +1498,12 @@ the bypass (its `Roles` can only name roles; the marker lives in
 
 **The rule.** An action that is `Public`, or whose `Roles` lists **any**
 role without the bypass (for example `httpx.Roles("organizer", "admin")`),
-writes an owned table only in the signed-in user's name:
+writes an owned table only in the signed-in user's name. Mixing a bypass
+role with a non-bypass role does **not** give the bypass role a free pass
+on that action: the English says so ("role `admin` bypasses ownership, but
+this action is also open to `organizer`, so every write is limited to the
+signed-in user's rows"). Put administrators on their own action
+(`httpx.Roles("admin")`) when they must change anyone's rows:
 
 - a Q6 UPDATE (claim) has `<owner col> = sqlc.arg(<p>)` as an AND
   condition of its `WHERE` (not inside an OR group) and does not `SET` the

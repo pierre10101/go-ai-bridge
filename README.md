@@ -54,17 +54,21 @@ compare the two: what was asked, and what was built.
 
 ## Quickstart (5 minutes)
 
-You need Go 1.24 and [sqlc](https://sqlc.dev).
+You need Go 1.24 or newer (`go.mod`'s `go 1.24.0` line is a **floor**, not a
+pin; newer toolchains are fine) and [sqlc](https://sqlc.dev) v1.31.1.
 
 **1. Install, pinned.** The app's `go.mod` is the pin; the binary must be the
-same version (`-check` refuses any other).
+same version (`-check` refuses any other). Prefer a **prebuilt sqlc** (the
+GitHub release binary) over `go install` — compiling sqlc from source pulls
+~50 modules and can take minutes.
 
 ```sh
 mkdir seat-app && cd seat-app && git init -q
 go mod init example.com/seat-app
 go get github.com/pierre10101/go-ai-bridge@v0.7.0
 go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.7.0
-go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+# sqlc: https://github.com/sqlc-dev/sqlc/releases (v1.31.1), or the slow path:
+# go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 bridge-en -version                      # bridge-en 0.7.0
 ```
 
@@ -80,9 +84,11 @@ bridge-en init
 # wrote     GEMINI.md
 ```
 
-**3. The app's skeleton.** `schema.sql` (tables), `schema.go` (embeds it for
-`store.Open`), `sqlc.yaml` (one entry per feature), `cmd/server/main.go` and
-`cmd/server/routes.go`. See [RULEBOOK.md, App layout](RULEBOOK.md#app-layout).
+**3. The app's skeleton.** Copy the layout of the fixture app in this repo
+(`adapter/testdata` + what `scripts/smoke-app.sh` builds): `schema.sql`
+(tables), `schema.go` (embeds it for `store.Open`), `sqlc.yaml` (one entry
+per feature), `cmd/server/main.go` and `cmd/server/routes.go`. See
+[RULEBOOK.md, App layout](RULEBOOK.md#app-layout).
 
 **4. The first feature, intent first.** `features/hold_seat/intent.md`:
 
@@ -240,9 +246,13 @@ jobs:
 
 ## Upgrading
 
+Do these in **one lockstep** (the pin in `go.mod`, the installed binary, and
+every `.en` file). Half an upgrade is refused by `-check`.
+
 ```sh
 go get github.com/pierre10101/go-ai-bridge@v<new>
 go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v<new>
+bridge-en -version               # must print bridge-en v<new>
 bridge-en -check features/*/     # fix any new refusal
 bridge-en -write features/*/     # regenerate the English
 bridge-en init -force            # refresh AGENTS.md and the pointer files
@@ -484,6 +494,10 @@ bridge-en pr-comment -base <sha> features/*/   # print the PR comment markdown
 
 ## FAQ
 
+**Where is the one-page shape list?** `bridge-en -grammar` prints every rule
+ID (I/D/S/E/Q/T/W/A/M/H) in one table — the cheat sheet before the 120 KB
+RULEBOOK. Refusals name the same IDs.
+
 **Why refuse instead of doing its best?** Because the English is only worth
 reviewing if it is exactly what the code does. A translator that guesses
 would give confident English for code it does not understand. A refusal
@@ -491,10 +505,17 @@ costs a rewrite in a known pattern; a wrong sentence costs a production bug
 that the review approved. Each refusal names the rule and what is allowed,
 so it is an instruction an AI agent can follow.
 
+**Why does every POST answer 201?** `httpx.SuccessStatus` maps POST → 201
+Created for every route, including non-creating actions (`POST …/return`).
+Use GET for pure reads; if you need 200 on a write, that is not in the
+grammar today (open an issue). PUT/PATCH/DELETE answer 200.
+
 **Why sqlc?** SQL stays plain SQL that bridge-en can read in a handful of
 strict shapes (count, one row, insert, keyset page, conditional claim), and
 sqlc generates typed Go for it. No ORM call hides a query, so every read and
-write appears in the English with its table and condition.
+write appears in the English with its table and condition. Prefer the
+[prebuilt sqlc release](https://github.com/sqlc-dev/sqlc/releases) over
+`go install`.
 
 **What if I need a pattern that is not supported?** First try to express it
 inside the rules: pure logic goes to `internal/domain` (rendered from its

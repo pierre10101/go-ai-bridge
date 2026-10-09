@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -535,11 +536,24 @@ func (w *walker) domainFields(lit *ast.CompositeLit, typ string) []string {
 		}
 		key := types.ExprString(kv.Key)
 		json := ""
+		known := false
 		if dt != nil {
 			for _, f := range dt.Fields {
 				if f.Name == key {
 					json = f.JSON
+					known = true
+					break
 				}
+			}
+			if !known {
+				names := make([]string, len(dt.Fields))
+				for i, f := range dt.Fields {
+					names[i] = f.Name
+				}
+				sort.Strings(names)
+				w.refuse(kv, fmt.Sprintf("unknown field %q for domain.%s", key, typ), "M1 domain type",
+					fmt.Sprintf("domain.%s has: %s", typ, strings.Join(names, ", ")))
+				continue
 			}
 		}
 		if json == "" {

@@ -206,13 +206,15 @@ func (w *walker) childOwnership(s ast.Stmt, q *SQLQuery, o *owner) string {
 		return fmt.Sprintf(t("unowned read"), rows, col)
 	}
 	childWrite := func() string {
+		var s string
 		if q.Source != "" {
-			return fmt.Sprintf(t("child insert"), singular(q.Table), chainRow(o.Parent), col, singular(o.Parent.Table))
+			s = fmt.Sprintf(t("child insert"), singular(q.Table), chainRow(o.Parent), col, singular(o.Parent.Table))
+		} else if q.Delete {
+			s = fmt.Sprintf(t("owned delete"), rows, col)
+		} else {
+			s = fmt.Sprintf(t("owned update"), rows, col)
 		}
-		if q.Delete {
-			return fmt.Sprintf(t("owned delete"), rows, col)
-		}
-		return fmt.Sprintf(t("owned update"), rows, col)
+		return s + w.mixedBypassNote() + "."
 	}
 	if bypass := w.bypassRoles(); bypass != nil {
 		if proven {
