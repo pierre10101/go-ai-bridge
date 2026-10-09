@@ -29,10 +29,9 @@ golden files `adapter/testdata/good/<slice>/<slice>.en` of the fixture app
 - [Statements: S1-S11](#statements-s1-s11)
 - [Expressions: E1-E7](#expressions-e1-e7)
 - [SQL: Q0-Q7](#sql-q0-q7)
-- [Rules across statements: T1-T3, W1](#rules-across-statements-t1-t3-w1)
+- [Rules across statements: T1-T4, W1](#rules-across-statements-t1-t4-w1)
 - [Who may call it: A1-A4](#who-may-call-it-a1-a4)
 - [Outside the slice: M1-M3, H1](#outside-the-slice-m1-m3-h1)
-- [GET requests: G10](#get-requests-g10)
 - [Conditional claim and state-transition rules](#conditional-claim-and-state-transition-rules)
 - [Hard limits](#hard-limits)
 - [The fixture app](#the-fixture-app)
@@ -108,7 +107,7 @@ diff of every `.en` file, commit. 0.4.0 is a breaking change: a table can
 declare its owner (`-- owner: <col>` in `schema.sql`) and then every write
 to it from an action a non-admin role may call is limited to the signed-in
 user's rows (A4), and a GET that sends a query parameter it does not declare
-is answered with HTTP 400 (G10); the migration steps are in README.md,
+is answered with HTTP 400 (T4); the migration steps are in README.md,
 "0.3.x to 0.4.0". 0.3.0 was one too: every action
 declares who may call it (`var Roles = httpx.Roles(...)` or `httpx.Public`,
 A1), the app declares its roles once in `cmd/server` (`httpx.AppRoles`, A2),
@@ -319,7 +318,7 @@ are set by the server; the caller must not send them
 (body or query string: HTTP 400), and the English lists them apart from the
 fields the caller sends. GET fields take `path:"<name>"` or `query:"<name>"`,
 and a GET request that sends any other query parameter is answered with
-HTTP 400 (G10).
+HTTP 400 (T4).
 
 ```go
 type Input struct {
@@ -900,7 +899,11 @@ Refused (`adapter/testdata/bad/list_shapes`):
 
 ---
 
-## Rules across statements: T1-T3, W1
+## Rules across statements: T1-T4, W1
+
+T1-T4 bind the request: the values the server sets and the caller must not
+send (the time T1, the session T2, the signed-in user and role T3), and the
+query string a GET accepts (T4). W1 orders the queries of one action.
 
 ### T1
 
@@ -1048,6 +1051,44 @@ Refused:
   `refused: field UserID with json name "user_id" that the caller sends is not in the allowed pattern list (T3 user, role passed in). Who the caller is never comes from the request. The server sets who the caller is: User int64 \`json:"user" server:"user"\` (or string) is the signed-in user and Role string \`json:"role" server:"role"\` their role; httpx.Bind fills both from the app's sign-in hook (httpx.Identify), and a request that sends them is HTTP 400. A field about someone else takes another name (for example member_id)`
 - `User int64 \`json:"owner" server:"user"\`` - `refused: server:"user" field User with json name "owner" is not in the allowed pattern list (T3 user, role passed in). Its json name is "user", ...`
 - `Role int64 \`json:"role" server:"role"\`` - `refused: server field Role of type int64 ...`; a path or query tag - `refused: server field User with a path or query tag ...`; a second `server:"user"` field - `refused: second user field Other ...`; on Output - `refused: server tag on CreatedAs outside Input ...` (`TestRolesRefusals`)
+
+### T4
+
+**strict query string** - a GET request's query string takes only the values
+its Input declares with `query:"<name>"`, as strictly as a JSON body takes
+only its listed fields. `httpx.Bind` (`runtime/httpx`) answers HTTP 400
+`bad_request`, and the action does not run, when a GET sends any other query
+parameter: an unknown name (`?debug=1`, `?offset=10`, a cache-buster
+`?_=123`), a declared name in another letter case (`?Limit=5`), or a path
+value's name (`?id=2`). A server-set name (`now`, `session`, `user`,
+`role`, T1-T3) is HTTP 400 too, in any letter case (with its own message).
+A GET that declares no query value (`my_events`) refuses every query
+parameter. Before 0.4.0 an unknown query parameter was ignored, so a typo
+(`?limt=5`) silently gave the default page.
+
+```go
+type Input struct {
+	CustomerID int64 `json:"customer_id" path:"id"`
+	After      int64 `json:"after" query:"after"`
+	Limit      int64 `json:"limit" query:"limit"`
+}
+```
+English (`adapter/testdata/good/list_customer_invoices/list_customer_invoices.en`,
+quoting `httpx.StrictQueryRule` after the GET inputs, and
+`httpx.BadQueryWhen` in the 400 answer):
+```
+The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
+...
+- HTTP 400 Bad Request, id "bad_request", with a message describing the problem, if a path value is missing, a value is not a whole number, a query value appears more than once, or the query string has a parameter not listed above (names are case-sensitive). The action does not run.
+```
+`runtime/httpx` `TestStrictQueryRule` proves each sentence; the
+`list_customer_invoices` and `my_events` checks prove it over HTTP against
+SQLite (`?debug=1`, `?Limit=2`, `?id=2`, `?x=1`: HTTP 400; the declared
+`?limit=2&after=3`: HTTP 200).
+
+Refused: nothing in `action.go` (the rule is the runtime's answer, said in
+the English of every GET). At runtime: `GET /customers/1/invoices?offset=1` -
+HTTP 400 `{"error": {"id": "bad_request", "message": "query parameter \"offset\" is not one this action takes"}}`.
 
 ### W1
 
@@ -1385,48 +1426,6 @@ Refused: a route bound over a plain `*sql.DB`, or with an app's own `httpx` - `c
 
 ---
 
-## GET requests: G10
-
-### G10
-
-**strict queries** - a GET request's query string takes only the values
-its Input declares with `query:"<name>"`, as strictly as a JSON body takes
-only its listed fields. `httpx.Bind` (`runtime/httpx`) answers HTTP 400
-`bad_request`, and the action does not run, when a GET sends any other query
-parameter: an unknown name (`?debug=1`, `?offset=10`, a cache-buster
-`?_=123`), a declared name in another letter case (`?Limit=5`), or a path
-value's name (`?id=2`). A server-set name (`now`, `session`, `user`,
-`role`, T1-T3) is HTTP 400 too, in any letter case (with its own message).
-A GET that declares no query value (`my_events`) refuses every query
-parameter. Before 0.4.0 an unknown query parameter was ignored, so a typo
-(`?limt=5`) silently gave the default page.
-
-```go
-type Input struct {
-	CustomerID int64 `json:"customer_id" path:"id"`
-	After      int64 `json:"after" query:"after"`
-	Limit      int64 `json:"limit" query:"limit"`
-}
-```
-English (`adapter/testdata/good/list_customer_invoices/list_customer_invoices.en`,
-quoting `httpx.StrictQueryRule` after the GET inputs, and
-`httpx.BadQueryWhen` in the 400 answer):
-```
-The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run.
-...
-- HTTP 400 Bad Request, id "bad_request", with a message describing the problem, if a path value is missing, a value is not a whole number, a query value appears more than once, or the query string has a parameter not listed above (names are case-sensitive). The action does not run.
-```
-`runtime/httpx` `TestStrictQueryRule` proves each sentence; the
-`list_customer_invoices` and `my_events` checks prove it over HTTP against
-SQLite (`?debug=1`, `?Limit=2`, `?id=2`, `?x=1`: HTTP 400; the declared
-`?limit=2&after=3`: HTTP 200).
-
-Refused: nothing in `action.go` (the rule is the runtime's answer, said in
-the English of every GET). At runtime: `GET /customers/1/invoices?offset=1` -
-HTTP 400 `{"error": {"id": "bad_request", "message": "query parameter \"offset\" is not one this action takes"}}`.
-
----
-
 ## Conditional claim and state-transition rules
 
 For any action that moves a row from one state to another only if a
@@ -1510,7 +1509,7 @@ writes documents only, never code, into the directory:
 
 | File | For | Content |
 |---|---|---|
-| `AGENTS.md` | every agent (the cross-tool standard) and people | the workflow: install by the go.mod pin, intent first, `-check` after every edit, `-write` and read the `.en` against the intent, never edit `.en`, the server's time, session and signed-in user and role passed in, every action's required `Roles` declaration, owned tables (A4) and strict GET queries (G10), claims, a thin UI, countdowns from the server's `now`/`expires_at`, errors on `error.id`, pull requests only, and an example feature |
+| `AGENTS.md` | every agent (the cross-tool standard) and people | the workflow: install by the go.mod pin, intent first, `-check` after every edit, `-write` and read the `.en` against the intent, never edit `.en`, the server's time, session and signed-in user and role passed in, every action's required `Roles` declaration, owned tables (A4) and strict GET queries (T4), claims, a thin UI, countdowns from the server's `now`/`expires_at`, errors on `error.id`, pull requests only, and an example feature |
 | `.cursor/rules/bridge-en.mdc` | Cursor (`alwaysApply: true`) | "follow AGENTS.md" and the five rules that matter most |
 | `CLAUDE.md` | Claude Code | the same pointer |
 | `.github/copilot-instructions.md` | GitHub Copilot | the same pointer |

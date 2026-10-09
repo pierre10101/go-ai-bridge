@@ -62,11 +62,9 @@ func TestRolesContract(t *testing.T) {
 	if want := "Who may call it: signed-in users with role `admin`. Anyone else"; !strings.Contains(got, want) {
 		t.Fatalf("want %q in:\n%s", want, got)
 	}
-	// Public: anyone; no 401/403 line; the user and role say their signed-out value.
-	// (In the fixture app, events is owned (A4) and a Public action never
-	// writes an owned table, so this runs in an app without the annotation.)
-	root := tempApp(t, withoutOwner(t), "")
-	got, err = Render(addSlice(t, root, eventFixture, "create_event", "action.go", `httpx.Roles("organizer", "admin")`, `httpx.Public`))
+	// Public: anyone; no 401/403 line; the user and role say their signed-out
+	// value. my_events is the fixture app's Public action (a read).
+	got, err = Render(myEventsFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +79,12 @@ func TestRolesContract(t *testing.T) {
 	}
 	if strings.Contains(got, "HTTP 401") || strings.Contains(got, "HTTP 403") {
 		t.Errorf("a Public action has no 401/403 answer:\n%s", got)
+	}
+	// create_event writes events, which the fixture app's schema.sql owns
+	// (A4), so it cannot be Public.
+	_, err = mutateEvent(t, `httpx.Roles("organizer", "admin")`, `httpx.Public`)
+	if want := "refused: write to owned table events (query InsertEvent) in a Public action is not in the allowed pattern list (A4 ownership)"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("want %q in:\n%v", want, err)
 	}
 }
 
@@ -138,7 +142,8 @@ func TestRolesRefusals(t *testing.T) {
 
 // TestAppRoles (A2): the app's roles are declared once in cmd/server with
 // httpx.AppRoles; a role-restricted action in an app without it is refused,
-// and so is a malformed declaration. A Public action needs none.
+// and so is a malformed declaration. A Public action (the fixture app's
+// my_events) needs none.
 func TestAppRoles(t *testing.T) {
 	routes := func(decl string) string {
 		return "package main\n\nimport \"github.com/pierre10101/go-ai-bridge/runtime/httpx\"\n\n" + decl + "\n"
@@ -163,15 +168,17 @@ func TestAppRoles(t *testing.T) {
 			copyDir(t, "testdata/internal", filepath.Join(root, "internal"))
 			gomod, _ := os.ReadFile("testdata/go.mod")
 			os.WriteFile(filepath.Join(root, "go.mod"), []byte(strings.Replace(string(gomod), "=> ../..", "=> "+mustAbs(t, ".."), 1)), 0o644)
-			os.WriteFile(filepath.Join(root, "schema.sql"), []byte(withoutOwner(t)), 0o644) // A2 only: no A4 owner
+			os.WriteFile(filepath.Join(root, "schema.sql"), []byte(mustRead(t, "testdata/schema.sql")), 0o644)
 			if tc.routes != "" {
 				os.MkdirAll(filepath.Join(root, "cmd", "server"), 0o755)
 				os.WriteFile(filepath.Join(root, "cmd", "server", "routes.go"), []byte(tc.routes), 0o644)
 			}
-			dir := filepath.Join(root, "features", "create_event")
-			copyDir(t, eventFixture, dir)
-			src, _ := os.ReadFile(filepath.Join(dir, "action.go"))
-			os.WriteFile(filepath.Join(dir, "action.go"), []byte(strings.Replace(string(src), `httpx.Roles("organizer", "admin")`, tc.roles, 1)), 0o644)
+			var dir string
+			if tc.roles == `httpx.Public` {
+				dir = addSlice(t, root, myEventsFixture, "my_events")
+			} else {
+				dir = addSlice(t, root, eventFixture, "create_event", "action.go", `httpx.Roles("organizer", "admin")`, tc.roles)
+			}
 			_, err := Render(dir)
 			switch {
 			case tc.want == "" && err != nil:

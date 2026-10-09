@@ -15,7 +15,7 @@ import (
 const BadQueryWhen = "a path value is missing, a value is not a whole number, a query value appears more than once, or the query string has a parameter not listed above (names are case-sensitive)"
 
 // StrictQueryRule is how Bind treats the query string of a GET (quoted by
-// bridge-en, grammar G10): the same strictness as a JSON body, which may
+// bridge-en, grammar T4): the same strictness as a JSON body, which may
 // not have a field that is not listed. unknownQuery enforces it.
 const StrictQueryRule = "The query string is as strict as a body: a query parameter that is not listed above (names are case-sensitive) is answered with HTTP 400 below and the action does not run."
 

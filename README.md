@@ -245,7 +245,7 @@ passed on 0.3.x keeps compiling, but the `.en` of every GET changes (so
 you declare an owner, and a GET client that sends an undeclared query
 parameter now gets HTTP 400.
 
-1. **G10 (runtime, no code change):** a GET request whose query string has a
+1. **T4 (runtime, no code change):** a GET request whose query string has a
    parameter the action does not declare with `query:"<name>"`, also in
    another letter case (`?Limit=5`) or a path value's name, is answered with
    HTTP 400 `bad_request` and the action does not run; before, it was
@@ -437,7 +437,7 @@ and publishes the archives, `RULEBOOK.md` and `SHA256SUMS`.
 | `adapter TestRulebookCoversGrammar` | RULEBOOK.md has exactly one section per rule ID |
 | `adapter TestRolesContract`, `TestRolesRefusals`, `TestAppRoles` | A1-A3, T3: who may call each action, the app-wide role list, the signed-in user and role in the English, and every refused form |
 | `adapter TestOwnershipEnglish`, `TestOwnershipRefusals`, `TestOwnerAnnotations`, `TestBypassOwnership` | A4: the "Ownership:" sentence of every step on an owned table; an unscoped write, a write scoped to a request field or a literal, a Public writer, a given-away row, a user of another type, a malformed annotation and a malformed bypass are refused at `file:line:col` |
-| `runtime/httpx TestStrictQueryRule` | G10: a GET with an undeclared query parameter (any letter case, a path name) is HTTP 400 and the action does not run |
+| `runtime/httpx TestStrictQueryRule` | T4: a GET with an undeclared query parameter (any letter case, a path name) is HTTP 400 and the action does not run |
 | `runtime/httpx TestRolesRule`, `TestZeroAccessDeniesEveryone`, `TestPublicRule`, `TestUserAndRoleAreNeverSent` | 401 / 403 before the action runs, deny by default, the signed-in user and role filled by the server and never accepted from the request |
 | `adapter TestClock*`, `TestSession*`, `TestRollbackWording`, `TestStrictClaimCheck`, `TestMultiRowClaim*`, `TestINShapes`, `TestPrimaryKeys`, `TestSQLShapes`, `TestClaimRules`, `TestRefusalsInHandle`, `TestDomainUnderGrammar`, `TestBoundNeedsTxn`, `TestCheckPin` | the exact English and refusals of each rule (see RULEBOOK.md) |
 | `internal/initdocs Test*` | init writes only the five documents, keeps existing files without `-force`, and AGENTS.md covers the workflow |

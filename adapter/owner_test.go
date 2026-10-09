@@ -11,30 +11,16 @@ const (
 	renameFixture      = "testdata/good/rename_event"
 	adminRenameFixture = "testdata/good/admin_rename_event"
 	myEventsFixture    = "testdata/good/my_events"
-	ownerAnnotation    = "-- owner: organizer_id\n"
 )
 
-// withoutOwner is the fixture app's schema.sql without its A4 annotation.
-func withoutOwner(t *testing.T) string {
-	t.Helper()
-	schema, err := os.ReadFile("testdata/schema.sql")
-	if err != nil || !strings.Contains(string(schema), ownerAnnotation) {
-		t.Fatalf("testdata/schema.sql no longer declares %q (%v)", ownerAnnotation, err)
-	}
-	return strings.Replace(string(schema), ownerAnnotation, "", 1)
-}
-
-// tempApp builds a module like the fixture app in a temporary directory:
-// go.mod (requiring this checkout), internal/domain, the given schema.sql
-// and cmd/server/routes.go (the fixture app's when routes is "").
-func tempApp(t *testing.T, schema, routes string) string {
+// appWithRoutes builds a module like the fixture app in a temporary
+// directory, with its go.mod (requiring this checkout), internal/domain and
+// schema.sql, but the given cmd/server/routes.go: for the cases that need
+// other roles than the fixture app's.
+func appWithRoutes(t *testing.T, routes string) string {
 	t.Helper()
 	root := t.TempDir()
 	copyDir(t, "testdata/internal", filepath.Join(root, "internal"))
-	gomod, err := os.ReadFile("testdata/go.mod")
-	if err != nil {
-		t.Fatal(err)
-	}
 	write := func(rel, content string) {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
 			t.Fatal(err)
@@ -43,17 +29,18 @@ func tempApp(t *testing.T, schema, routes string) string {
 			t.Fatal(err)
 		}
 	}
-	write("go.mod", strings.Replace(string(gomod), "=> ../..", "=> "+mustAbs(t, ".."), 1))
-	write("schema.sql", schema)
-	if routes == "" {
-		src, err := os.ReadFile("testdata/cmd/server/routes.go")
-		if err != nil {
-			t.Fatal(err)
-		}
-		routes = string(src)
-	}
+	write("go.mod", strings.Replace(mustRead(t, "testdata/go.mod"), "=> ../..", "=> "+mustAbs(t, ".."), 1))
+	write("schema.sql", mustRead(t, "testdata/schema.sql"))
 	write("cmd/server/routes.go", routes)
 	return root
+}
+
+// inFixtureApp copies a fixture slice, with the edits addSlice applies, into
+// the fixture app itself (testdata/tmp-*), so its schema.sql and cmd/server
+// apply unchanged; it returns the slice dir.
+func inFixtureApp(t *testing.T, fixture, name string, edits ...string) string {
+	t.Helper()
+	return addSlice(t, moduleTempDir(t), fixture, name, edits...)
 }
 
 // addSlice copies a fixture slice to <root>/features/<name> and applies the
@@ -97,8 +84,7 @@ func TestOwnershipEnglish(t *testing.T) {
 		}
 	}
 	// A read that is not limited to the caller's rows is allowed, and says so.
-	root := tempApp(t, mustRead(t, "testdata/schema.sql"), "")
-	got, err := Render(addSlice(t, root, myEventsFixture, "my_events",
+	got, err := Render(inFixtureApp(t, myEventsFixture, "my_events",
 		"queries/count_events.sql", "WHERE organizer_id = sqlc.arg(organizer_id)", "WHERE created_as = sqlc.arg(created_as)",
 		"action.go", "a.q.CountMyEvents(ctx, in.User)", "a.q.CountMyEvents(ctx, in.Role)"))
 	if err != nil {
@@ -109,17 +95,15 @@ func TestOwnershipEnglish(t *testing.T) {
 	}
 	// Two roles that both bypass ownership.
 	routes := strings.Replace(mustRead(t, "testdata/cmd/server/routes.go"), `.BypassOwnership("admin")`, `.BypassOwnership("admin", "finance")`, 1)
-	root = tempApp(t, mustRead(t, "testdata/schema.sql"), routes)
-	got, err = Render(addSlice(t, root, adminRenameFixture, "admin_rename_event", "action.go", `httpx.Roles("admin")`, `httpx.Roles("admin", "finance")`))
+	got, err = Render(addSlice(t, appWithRoutes(t, routes), adminRenameFixture, "admin_rename_event", "action.go", `httpx.Roles("admin")`, `httpx.Roles("admin", "finance")`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := "because only roles `admin` or `finance` may call this action and cmd/server declares that they bypass ownership."; !strings.Contains(got, want) {
 		t.Errorf("want %q in:\n%s", want, got)
 	}
-	// Without the annotation, nothing is said about ownership.
-	root = tempApp(t, withoutOwner(t), "")
-	got, err = Render(addSlice(t, root, adminRenameFixture, "admin_rename_event"))
+	// A table without an owner annotation (invoices): nothing is said about ownership.
+	got, err = Render("testdata/good/create_invoice")
 	if err != nil || strings.Contains(got, "Ownership") {
 		t.Errorf("a table without an owner: %v\n%s", err, got)
 	}
@@ -168,24 +152,21 @@ func TestOwnershipRefusals(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			root := tempApp(t, mustRead(t, "testdata/schema.sql"), "")
-			_, err := Render(addSlice(t, root, renameFixture, "rename_event", tc.edits...))
+			_, err := Render(inFixtureApp(t, renameFixture, "rename_event", tc.edits...))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("want %q in:\n%v", tc.want, err)
 			}
 		})
 	}
 	// An insert that does not set the owner column.
-	root := tempApp(t, mustRead(t, "testdata/schema.sql"), "")
-	_, err := Render(addSlice(t, root, eventFixture, "create_event",
+	_, err := Render(inFixtureApp(t, eventFixture, "create_event",
 		"queries/insert_event.sql", "INSERT INTO events (organizer_id, created_as, title, starts_at)\nVALUES (sqlc.arg(organizer_id), ", "INSERT INTO events (created_as, title, starts_at)\nVALUES (",
 		"action.go", "OrganizerID: in.User,\n", ""))
 	if want := "refused: insert into owned table events (query InsertEvent) that does not set its owner column organizer_id to the signed-in user is not in the allowed pattern list (A4 ownership)"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("want %q in:\n%v", want, err)
 	}
 	// An admin-only action may do all of the above but give it to a Public action.
-	root = tempApp(t, mustRead(t, "testdata/schema.sql"), "")
-	if _, err := Render(addSlice(t, root, renameFixture, "rename_event", "action.go", `httpx.Roles("organizer")`, `httpx.Roles("admin")`,
+	if _, err := Render(inFixtureApp(t, renameFixture, "rename_event", "action.go", `httpx.Roles("organizer")`, `httpx.Roles("admin")`,
 		sql, scoped, "WHERE id = sqlc.arg(id);", "action.go", call, "db.RenameOwnEventParams{Title: in.Title, ID: in.EventID}")); err != nil {
 		t.Fatalf("admin-only: %v", err)
 	}

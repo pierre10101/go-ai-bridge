@@ -77,7 +77,7 @@ func TestAgentsCoversTheWorkflow(t *testing.T) {
 		"blob/v9.9.9/RULEBOOK.md",
 		"-- owner: organizer_id", "AND\n  organizer_id = sqlc.arg(organizer_id)", "`OrganizerID: in.User`",
 		`.BypassOwnership("admin")`, "only events you own", "Public action never writes it",
-		"A GET takes only the query values it declares (G10)", "answered with HTTP 400",
+		"A GET takes only the query values it declares (T4)", "answered with HTTP 400",
 	} {
 		if !strings.Contains(s, w) {
 			t.Errorf("AGENTS.md: missing %q", w)

@@ -141,3 +141,29 @@ func TestHTTPUserAndRoleFromTheRequestAre400(t *testing.T) {
 		}
 	}
 }
+
+// "Ownership: the new event is yours (`organizer_id` is the signed-in
+// user)." events is owned by organizer_id (A4, schema.sql), so the stored
+// row's owner is the signed-in user from the server for every allowed role
+// (admin too: this action is also open to organizers, so it never bypasses
+// ownership), and an owner sent in the body is HTTP 400 with nothing written.
+func TestHTTPNewEventIsOwnedByTheSignedInUser(t *testing.T) {
+	for _, role := range []string{"organizer", "admin"} {
+		_, conn := newAction(t)
+		if rec := serveOn(t, conn, "/events", goodBody, "42", role); rec.Code != http.StatusCreated {
+			t.Fatalf("%s: status %d %s", role, rec.Code, rec.Body)
+		}
+		var owner int64
+		if err := conn.QueryRow("SELECT organizer_id FROM events").Scan(&owner); err != nil || owner != 42 {
+			t.Fatalf("%s: stored organizer_id %d (%v), want the signed-in user 42", role, owner, err)
+		}
+	}
+	_, conn := newAction(t)
+	rec := serveOn(t, conn, "/events", `{"title":"x","starts_at":1800000600,"organizer_id":7}`, "42", "organizer")
+	if eb := errorBody(t, rec); rec.Code != httpx.BadInput.Status || eb.Error.ID != httpx.BadInput.ID {
+		t.Fatalf("an owner in the body: status %d %s", rec.Code, rec.Body)
+	}
+	if countEvents(t, conn) != 0 {
+		t.Fatal("an owner in the body must not write")
+	}
+}

@@ -19,7 +19,8 @@ sends `user` or `role` is a bad request (HTTP 400).
 
 ## Outputs
 - `event_id` — the new event.
-- `organizer_id` — the signed-in user, who now owns the event.
+- `organizer_id` — the signed-in user, who now owns the event: only they
+  (or an admin, through an admin-only action) may change it later.
 - `created_as` — the role they created it with.
 
 ## Failure cases

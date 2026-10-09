@@ -117,7 +117,7 @@ func TestHTTPBadQueryParamIs400(t *testing.T) {
 	}
 }
 
-// G10 over HTTP against SQLite: a query parameter the action does not
+// T4 over HTTP against SQLite: a query parameter the action does not
 // declare (`limit` and `after` are its only ones), also `Limit` in another
 // letter case or the path's `id`, is answered with HTTP 400 bad_request and
 // the action does not run; the declared ones still answer 200.

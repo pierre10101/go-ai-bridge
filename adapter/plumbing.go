@@ -26,7 +26,7 @@ import (
 //     the declared outcomes BadInput and Internal, the SuccessStatus table,
 //     InputRule, QueryInputRule, BadQueryWhen, TxRule, ReadTxRule, ClockRule,
 //     SessionRule, SessionValue, ServerSetWhen, ListRule, ListRuleExact,
-//     ListElems, ListWhen, StrictQueryRule (G10) and the ErrorBody shape.
+//     ListElems, ListWhen, StrictQueryRule (T4) and the ErrorBody shape.
 //     Bind uses these values and httpx's own tests prove each one, so the HTTP and transaction sentences in every .en file
 //     are tied to the plumbing.
 
@@ -61,7 +61,7 @@ type plumbing struct {
 	SignedOutRule      string // T3, Public actions: {zero}
 	SignedOutZero      map[string]string
 	ErrorShape         string
-	StrictQueryRule    string // G10: a GET's query string takes only the listed values
+	StrictQueryRule    string // T4: a GET's query string takes only the listed values
 }
 
 // appRoles is the app-wide role list (A2): the one httpx.AppRoles(...) call

@@ -91,7 +91,7 @@ func TestHTTPUserOrRoleInTheQueryIs400(t *testing.T) {
 	}
 }
 
-// G10: "The query string is as strict as a body: a query parameter that is
+// T4: "The query string is as strict as a body: a query parameter that is
 // not listed above (names are case-sensitive) is answered with HTTP 400".
 // My events lists none, so any query parameter is a bad request.
 func TestHTTPUnknownQueryParameterIs400(t *testing.T) {

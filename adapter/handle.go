@@ -1099,14 +1099,14 @@ func (w *walker) finish() {
 	f.InputCount = count(len(f.BodyInput))
 	if f.Method == "GET" && len(f.BodyInput) == 0 {
 		f.InputIntro = docSentences["get no input"] // only server-set values (T1-T3)
-		f.InputRule = h.StrictQueryRule             // G10
+		f.InputRule = h.StrictQueryRule             // T4
 	} else if f.Method == "GET" {
 		f.InputIntro = docSentences["get input"]
 		f.InputRule = h.QueryInputRule
 		if f.InputRule == "" || h.StrictQueryRule == "" {
 			w.errs = append(w.errs, Refusal{Pos: token.Position{Filename: "runtime/httpx"}, Construct: "missing QueryInputRule or StrictQueryRule", Context: "H1 http plumbing", Hint: "runtime/httpx declares QueryInputRule and StrictQueryRule for GET slices"})
 		}
-		f.InputRule += " " + h.StrictQueryRule // G10
+		f.InputRule += " " + h.StrictQueryRule // T4
 	} else {
 		f.InputIntro = "The request body is one JSON object with " + f.InputCount + " and no others:"
 		f.InputRule = h.InputRule

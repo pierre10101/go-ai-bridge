@@ -1,7 +1,10 @@
 // Package create_event is a fixture slice: it proves how bridge-en renders
 // A1 (an action that only some roles may call: httpx.Bind answers 401 or
-// 403 before Handle runs) and T3 (the owner is the signed-in user from the
-// server, server:"user", never an id from the request). RULEBOOK.md quotes
+// 403 before Handle runs), T3 (the owner is the signed-in user from the
+// server, server:"user", never an id from the request) and A4 (events is
+// owned by organizer_id, so the insert sets it to the signed-in user; the
+// action is open to organizers, so admin does not bypass that here; a
+// Public create_event is refused). RULEBOOK.md quotes
 // create_event.en; scripts/smoke-app.sh builds it in a new app and runs its
 // checks.
 package create_event

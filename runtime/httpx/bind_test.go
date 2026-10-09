@@ -206,7 +206,7 @@ func TestGETBadLimitIs400(t *testing.T) {
 	}
 }
 
-// StrictQueryRule (G10) and BadQueryWhen: a GET whose query string has a
+// StrictQueryRule (T4) and BadQueryWhen: a GET whose query string has a
 // parameter the action does not declare, in any letter case other than the
 // declared one, is answered with BadInput and the action does not run; the
 // declared ones still work. A GET that declares no query value refuses any.

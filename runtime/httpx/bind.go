@@ -116,7 +116,7 @@ func Bind[I any, O any](access Access, handle func(context.Context, I) (O, error
 		var in I
 		msg := serverSetSent[I](r) // ClockRule, SessionRule, UserRule, RoleRule: never from the query string
 		if msg == "" && r.Method == http.MethodGet {
-			msg = unknownQuery[I](r) // StrictQueryRule (G10): no query parameter the action does not declare
+			msg = unknownQuery[I](r) // StrictQueryRule (T4): no query parameter the action does not declare
 		}
 		if msg == "" {
 			if r.Method == http.MethodGet && hasParamTags[I]() {

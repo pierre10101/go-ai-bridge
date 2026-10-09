@@ -39,8 +39,8 @@ copy bridge-en code into the app.
    `sqlc generate`. A table whose rows belong to a user says so in
    `schema.sql`, on the comment line right above its `CREATE TABLE`:
    `-- owner: organizer_id` (A4).
-3. `features/<slice>/action.go` in the grammar (D1-D10, S1-S11, E1-E7, T1-T3,
-   A1-A4, G10). The F-IDs it declares are exactly those of intent.md. It declares
+3. `features/<slice>/action.go` in the grammar (D1-D10, S1-S11, E1-E7, T1-T4,
+   A1-A4). The F-IDs it declares are exactly those of intent.md. It declares
    who may call it (A1, required): `var Roles = httpx.Roles("organizer",
    "admin")` for signed-in users with one of those roles (each role one of the
    app's, declared once in `cmd/server` with `httpx.AppRoles`), or
@@ -96,7 +96,7 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
   rows are marked once in `cmd/server`:
   `var AppRoles = httpx.AppRoles("customer", "organizer", "admin").BypassOwnership("admin")`;
   only an action whose Roles are all such roles may skip the filter.
-- **A GET takes only the query values it declares (G10).** Any other query
+- **A GET takes only the query values it declares (T4).** Any other query
   parameter (also another letter case, or a cache-buster like `?_=123`) is
   answered with HTTP 400, like an unknown body field. The UI sends exactly
   the declared `query:"..."` values.
