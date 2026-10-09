@@ -15,14 +15,14 @@ import (
 	"github.com/pierre10101/go-ai-bridge/runtime/httpx"
 )
 
-const Route = "PATCH /events/title"
+const Route = "PATCH /events/{id}/title"
 
 // Roles: only signed-in organizers (A1); "organizer" does not bypass
 // ownership, so the rename is limited to the organizer's own events (A4).
 var Roles = httpx.Roles("organizer")
 
 type Input struct {
-	EventID int64  `json:"event_id"`
+	EventID int64  `json:"event_id" path:"id"`
 	Title   string `json:"title"`
 	User    int64  `json:"user" server:"user"`
 }

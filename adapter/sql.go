@@ -613,13 +613,9 @@ func (p *sqlParser) from() {
 				return
 			}
 			// Q5 keyset: <cursor> < <value> ORDER BY <cursor> DESC (newest first).
+			// Equality filters before the cursor are optional: a public catalog
+			// page may be only the cursor (WHERE id < ? ORDER BY id DESC LIMIT ?).
 			if op == "<" && p.q.Shape == "row" && p.is("ORDER") {
-				if len(p.q.Where) == 0 {
-					p.failed = true
-					*p.errs = append(*p.errs, Refusal{Pos: t.pos, Construct: "keyset page with no equality WHERE", Context: "query " + p.q.Name,
-						Hint: "Q5 needs at least one <col> = <value> before the cursor; " + allowedSQL})
-					return
-				}
 				p.q.CursorCol, p.q.CursorVal = col, v
 				p.finishPage()
 				p.noComparisonInPage()

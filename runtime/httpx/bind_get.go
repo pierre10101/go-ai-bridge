@@ -24,6 +24,15 @@ const StrictQueryRule = "The query string is as strict as a body: a query parame
 // (MaxPageSize, DefaultPageSize); bridge-en states them from there.
 const QueryInputRule = "Path values are required. A query value may be left out: `limit` is then the default page size and `after` starts the list at the newest row. A missing path value, or a value that is not a whole number, is answered with HTTP 400 below and the action does not run."
 
+// PathBodyRule is how Bind treats path-tagged fields on a non-GET request
+// (quoted by bridge-en): they come from the URL only; a body that also
+// carries them is answered with HTTP 400.
+const PathBodyRule = "A field taken from the path is not sent in the body: a body that carries it is answered with HTTP 400 below and the action does not run."
+
+// PathBodyWhen is the extra BadInput condition of an action with a path
+// field on a non-GET method (quoted by bridge-en after BadInput.When).
+const PathBodyWhen = "the body carries a field that comes from the path"
+
 // decodeParams fills I from path and query struct tags for GET requests.
 // Tags: `path:"id"` and `query:"limit"`. json tags still name the fields in English.
 func hasParamTags[I any]() bool {
@@ -35,6 +44,20 @@ func hasParamTags[I any]() bool {
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		if f.Tag.Get("path") != "" || f.Tag.Get("query") != "" || isServerSet(f) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPathTags[I any]() bool {
+	var zero I
+	t := reflect.TypeOf(zero)
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Tag.Get("path") != "" {
 			return true
 		}
 	}
@@ -92,6 +115,31 @@ func decodeParams[I any](r *http.Request) (I, string) {
 		return in, fmt.Sprintf("GET input field %q needs a path or query struct tag", f.Name)
 	}
 	return in, ""
+}
+
+// fillPath sets every path-tagged field of in from the URL. Used after JSON
+// decode on non-GET methods so PATCH /books/{id} fills book_id from the path.
+func fillPath[I any](in *I, r *http.Request) string {
+	v := reflect.ValueOf(in).Elem()
+	t := v.Type()
+	if t.Kind() != reflect.Struct {
+		return "internal: input type must be a struct"
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		pathName := f.Tag.Get("path")
+		if pathName == "" || !f.IsExported() {
+			continue
+		}
+		raw := r.PathValue(pathName)
+		if raw == "" {
+			return fmt.Sprintf("required path parameter %q is missing", pathName)
+		}
+		if msg := setInt64Field(v.Field(i), raw, "path "+pathName); msg != "" {
+			return msg
+		}
+	}
+	return ""
 }
 
 // unknownQuery returns a message when a GET request's query string has a

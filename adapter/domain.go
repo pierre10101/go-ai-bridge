@@ -22,10 +22,12 @@ import (
 const phrasePrefix = "bridge-en:"
 
 type domainType struct {
-	Name, Phrase string
-	Fields       []domainField // struct types only
-	pos          token.Position
+	Name, Phrase, Plural string        // Plural is optional (`// bridge-en-plural:`)
+	Fields               []domainField // struct types only
+	pos                  token.Position
 }
+
+const pluralPrefix = "bridge-en-plural:"
 
 type domainField struct{ Name, JSON, Type string }
 
@@ -142,10 +144,14 @@ func (l *domainLoader) genDecl(d *ast.GenDecl) {
 			if doc == nil && len(d.Specs) == 1 {
 				doc = d.Doc
 			}
-			dt := &domainType{Name: ts.Name.Name, Phrase: docLine(doc, phrasePrefix), pos: l.fset.Position(ts.Pos())}
+			dt := &domainType{Name: ts.Name.Name, Phrase: docLine(doc, phrasePrefix), Plural: docLine(doc, pluralPrefix), pos: l.fset.Position(ts.Pos())}
 			if strings.ContainsAny(dt.Phrase, "(){}") {
 				l.refuse(ts, "display name "+strconv.Quote(dt.Phrase)+" of domain type "+dt.Name+" with a description", "M1 domain type",
 					"`// bridge-en:` gives only the display name, a noun phrase like \"an invoice number\"; what the type means comes from code")
+			}
+			if dt.Plural != "" && strings.ContainsAny(dt.Plural, "(){}") {
+				l.refuse(ts, "plural display name "+strconv.Quote(dt.Plural)+" of domain type "+dt.Name+" with a description", "M1 domain type",
+					"`// bridge-en-plural:` gives only the plural noun phrase, with no parentheses")
 			}
 			if st, ok := ts.Type.(*ast.StructType); ok {
 				for _, fl := range st.Fields.List {

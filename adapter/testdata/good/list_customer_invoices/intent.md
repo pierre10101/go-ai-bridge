@@ -14,7 +14,7 @@ when not signed in, HTTP 403 for any other role.
 - `customer_id` — path `{id}`; the customer whose invoices to list (must exist).
 - `after` — query; keyset cursor: only invoices with a lower `seq` than this.
   Leave it out for the newest page; for the next page, send the previous
-  answer's `next_after`.
+  answer's `next_after` (stop when that is 0 — do not send `after=0`).
 - `limit` — query; page size, at most the domain's maximum page size; leave
   it out for the default page size (both in bridge-en's runtime/page).
 

@@ -562,8 +562,20 @@ func joinList(parts []string) string {
 }
 
 // pluralPhrase turns a display name ("an invoice summary") into its plural
-// ("invoice summaries").
+// ("invoice summaries"). When the domain type declares
+// `// bridge-en-plural: ...`, that form is used instead (for phrases the
+// naive last-word rule would mangle, e.g. "a book on a shelf").
 func pluralPhrase(phrase string) string {
+	return pluralPhraseOf(phrase, "")
+}
+
+func pluralPhraseOf(phrase, explicit string) string {
+	if explicit != "" {
+		for _, art := range []string{"a ", "an "} {
+			explicit = strings.TrimPrefix(explicit, art)
+		}
+		return explicit
+	}
 	for _, art := range []string{"a ", "an "} {
 		phrase = strings.TrimPrefix(phrase, art)
 	}

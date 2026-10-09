@@ -7,7 +7,7 @@
 //
 // bridge-en is built from the same module version and quotes the
 // declarations below (BadInput, Internal, SuccessStatus, InputRule,
-// QueryInputRule, BadQueryWhen, StrictQueryRule, TxRule, ReadTxRule, ErrorBody, ClockRule in
+// QueryInputRule, PathBodyRule, PathBodyWhen, BadQueryWhen, StrictQueryRule, TxRule, ReadTxRule, ErrorBody, ClockRule in
 // clock.go, SessionCookie, SessionRule, SessionValue and ServerSetWhen in
 // session.go, PublicRule, RolesRule, Unauthenticated, Forbidden, UserRule,
 // RoleRule, SignedOutRule and SignedOutZero in access.go, and ListRule, ListRuleExact, ListElems and ListWhen in
@@ -123,6 +123,9 @@ func Bind[I any, O any](access Access, handle func(context.Context, I) (O, error
 				in, msg = decodeParams[I](r)
 			} else {
 				in, msg = decode[I](w, r)
+				if msg == "" && hasPathTags[I]() {
+					msg = fillPath(&in, r) // path:"..." on every method, never from the body
+				}
 			}
 		}
 		if msg != "" {
@@ -226,6 +229,19 @@ func required(t reflect.Type, raw json.RawMessage, prefix string, missing *[]str
 				}
 			}
 			continue // ClockRule, SessionRule: filled by Bind, never required from the caller
+		}
+		if f.Tag.Get("path") != "" {
+			// PathBodyRule: filled from the URL after decode; a body that
+			// also carries the field is answered with 400.
+			if _, ok := obj[name]; ok {
+				return fmt.Sprintf("path field %q must not be in the body (it comes from the URL)", prefix+name)
+			}
+			for k := range obj {
+				if strings.EqualFold(k, name) && k != name {
+					return fmt.Sprintf("path field %q must not be in the body (it comes from the URL)", prefix+name)
+				}
+			}
+			continue
 		}
 		fields = append(fields, field{name, f.Type})
 	}

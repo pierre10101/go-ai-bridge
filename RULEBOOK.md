@@ -50,11 +50,11 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.6.0
+go get github.com/pierre10101/go-ai-bridge@v0.7.0
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.6.0
-bridge-en -version                      # bridge-en 0.6.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.7.0
+bridge-en -version                      # bridge-en 0.7.0
 ```
 
 Then `bridge-en init` writes `AGENTS.md` and pointer files for AI agents
@@ -64,7 +64,7 @@ into the app (documents only; see
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.6.0
+require github.com/pierre10101/go-ai-bridge v0.7.0
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -75,9 +75,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -98,12 +98,15 @@ and the app runs that same runtime: both come from the one module version in
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.6.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.6.0), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.7.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.7.0), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
-diff of every `.en` file, commit. 0.6.0 adds DELETE (Q10): a delete names
+diff of every `.en` file, commit. 0.7.0 lets a Q5 page omit equality
+filters, fills `path:"..."` on every method (never from the body), refuses
+non-ASCII in SQL files, and accepts an optional `// bridge-en-plural:`;
+see README.md, "0.6.x to 0.7.0". 0.6.0 adds DELETE (Q10): a delete names
 its rows by the table's key, is checked like a claim (S10), is limited to
 the caller's rows on owned (A4) and child (A5) tables exactly like an
 update, and is refused unless every foreign key that references the table
@@ -311,6 +314,8 @@ Refused: `import "fmt"` - `refused: import "fmt" is not in the allowed pattern l
 ### D3
 
 **route** - `const Route = "<METHOD> /<path>"`, the only constant.
+`<METHOD>` is one of `GET`, `POST`, `PUT`, `PATCH`, `DELETE` (the same set
+`httpx.SuccessStatus` answers: GET/PUT/PATCH/DELETE → 200, POST → 201).
 
 ```go
 const Route = "POST /invoices"
@@ -330,9 +335,14 @@ field tagged `clock:"now"` (T1), one `int64` or `string` field tagged
 (`int64` or `string`) and role `json:"role" server:"role"` (`string`) (T3)
 are set by the server; the caller must not send them
 (body or query string: HTTP 400), and the English lists them apart from the
-fields the caller sends. GET fields take `path:"<name>"` or `query:"<name>"`,
-and a GET request that sends any other query parameter is answered with
-HTTP 400 (T4).
+fields the caller sends. Every method may take `path:"<name>"` (filled from the URL; the route must
+contain `{<name>}`); on a non-GET the field is not sent in the JSON body
+(a body that carries it is HTTP 400). GET fields may also take
+`query:"<name>"`, and a GET request that sends any other query parameter is
+answered with HTTP 400 (T4). On GET, omit `after` for the start of a keyset
+list (Bind fills `page.StartCursor`); `after=0` is not the start — the
+answer's `next_after` is 0 when there is no next page, and sending that
+back as `after` is refused (F3).
 
 ```go
 type Input struct {
@@ -782,6 +792,13 @@ seat, err := a.q.SeatHolder(ctx, db.SeatHolderParams{ID: in.SeatID, Now: in.Now}
 ```
 English: `Read: find a seat whose `id` is the request's `seat_id` and `expires_at` is later than the current time (query `SeatHolder` in queries/seat_after.sql); if several match, the first row returned is used. Call it the found seat.` / `If no seat matches or the query fails, stop with HTTP 500 Internal Server Error.` (`TestClockComparisonInReads`)
 
+**Do not use Q2 as an existence probe.** A `:one` SELECT that finds no row
+is HTTP 500 by design (the English says so): that case is a bug signal, not
+a user failure. To decide *which* failure the caller hit (missing vs wrong
+state vs not yours), use a Q1 `SELECT COUNT(*)` first; only call Q2 after a
+count has proved the row exists. Putting a Q2 before a guard that branches
+on "not found" will 500 in tests the first time the row is missing.
+
 Refused: `SELECT * ...` - `refused: SELECT * is not in the allowed pattern list`; `... JOIN ...` - `refused: JOIN is not in the allowed pattern list`; `expires_at > sqlc.arg(now) - 600` with `Now: in.Cutoff` (`adapter/testdata/bad/read_clock_source`) - `refused: comparison expires_at > sqlc.arg(now) - 600 in query FindLiveHold, whose value in.Cutoff is not the server-set current time is not in the allowed pattern list (Q2 one row). ...`
 
 ### Q3
@@ -801,11 +818,16 @@ Refused: `WHERE id = (SELECT 1)` - `refused: subquery is not in the allowed patt
 
 ### Q5
 
-**keyset page** - `SELECT <col>, ... FROM <table> WHERE <col> = <value> [AND ...] AND <cursor> < <value> ORDER BY <cursor> DESC LIMIT <n>`;
-`:many` only, GET slices only, no OFFSET; the action guards its limit with `page.IsPageLimit`
+**keyset page** - `SELECT <col>, ... FROM <table> WHERE [<col> = <value> AND ...] <cursor> < <value> ORDER BY <cursor> DESC LIMIT <n>`;
+equality filters before the cursor are optional (a whole-table / public
+catalog page is only the cursor). `:many` only, GET slices only, no OFFSET;
+the action guards its limit with `page.IsPageLimit`
 (`runtime/page`, with `page.MaxPageSize` 100 and `page.DefaultPageSize` 20).
+Omit `after` for the newest page (Bind fills `page.StartCursor`). Do not
+send `after=0`: that value means "no next page" in `next_after`, and the
+fixture refuses it with F3 so a client that follows `next_after` stops.
 
-English: `5. Read: list the invoices whose `customer_id` is the request's `customer_id` and whose `seq` is less than the request's `after`, highest `seq` first, at most the request's `limit` of them (...). Call them the listed invoices; there may be none.`
+English: `5. Read: list the invoices whose `customer_id` is the request's `customer_id` and whose `seq` is less than the request's `after`, highest `seq` first, at most the request's `limit` of them (...). Call them the listed invoices; there may be none.` / bare: `Read: list the books whose `id` is less than the request's `after`, highest `id` first, ...`
 
 Refused: `... LIMIT ? OFFSET ?` - `refused: OFFSET ...`; a write query in a GET - `refused: write query AddInvoice in a GET action`; a comparison with the current time in a page (`adapter/testdata/bad/read_clock_position`) - `refused: comparison expires_at <= sqlc.arg(now) in a keyset page is not in the allowed pattern list (query PageEnded). A Q5 keyset page compares only its cursor (<cursor> < <value>); every other condition is <col> = <value>. A comparison with the current time belongs in a Q1 count, a Q2 one-row read or a Q6 claim`
 
@@ -1670,7 +1692,10 @@ table, written out, and `in.User`, or roles that bypass ownership):
 
 **domain type** - every `internal/domain` type an action uses has a
 `// bridge-en: <display name>` doc line, a noun phrase without parentheses:
-the only hand-written English.
+the only hand-written English. An optional
+`// bridge-en-plural: <plural>` overrides the naive last-word plural when a
+list would otherwise read wrong (`a book on a shelf` → `books on a shelf`
+instead of `book on a shelfs`).
 
 ```go
 // bridge-en: an amount of money
@@ -1861,8 +1886,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.6.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.7.0
         # with:
         #   features: "features/*/"   # default
         #   max-chars: "60000"        # default

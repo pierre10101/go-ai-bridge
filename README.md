@@ -36,6 +36,9 @@ compare the two: what was asked, and what was built.
   the table must say ON DELETE CASCADE or ON DELETE RESTRICT, and the
   English says which: "Each section ... is deleted with it" or "... schema.sql
   refuses the delete (ON DELETE RESTRICT)".
+- A keyset list (Q5) may be the whole table (`WHERE id < ? ORDER BY id DESC
+  LIMIT ?`); `path:"id"` works on PATCH/POST/DELETE as well as GET (filled
+  from the URL, never from the body).
 - Requests are strict: a body field or a GET query parameter the action
   does not declare is answered with HTTP 400.
 - [RULEBOOK.md](RULEBOOK.md) is the reference: every rule with an example, its
@@ -59,10 +62,10 @@ same version (`-check` refuses any other).
 ```sh
 mkdir seat-app && cd seat-app && git init -q
 go mod init example.com/seat-app
-go get github.com/pierre10101/go-ai-bridge@v0.6.0
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.6.0
+go get github.com/pierre10101/go-ai-bridge@v0.7.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.7.0
 go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-bridge-en -version                      # bridge-en 0.6.0
+bridge-en -version                      # bridge-en 0.7.0
 ```
 
 **2. Init.** Writes the instructions for AI agents (and you). Documents only,
@@ -207,7 +210,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0   # the version go.mod pins
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0   # the version go.mod pins
       - run: go test ./...
       - run: bridge-en -check features/*/
   english:
@@ -221,8 +224,8 @@ jobs:
         with: { fetch-depth: 0 }    # the comment diffs against the PR's base
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.6.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.6.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.7.0
         # with: { features: "features/*/", max-chars: "60000" }
 ```
 
@@ -248,6 +251,31 @@ git diff                         # review every .en change, then open a PR
 
 A new version can change the English of every feature (new wording, new
 rules); the `.en` diff in that pull request shows exactly how.
+
+### 0.6.x to 0.7.0: lists, path inputs
+
+0.7.0 is **mostly additive**. Apps that already compile against 0.6 stay
+accepted; their `.en` files may change in two places and should be
+regenerated (`bridge-en -write features/*/`) then reviewed:
+
+1. **Q5 keyset pages may omit equality filters.** A public catalog page is
+   now `WHERE id < ? ORDER BY id DESC LIMIT ?` (cursor only). The dummy
+   always-true flag column workaround is no longer needed.
+2. **`path:"..."` works on every method**, not only GET. Bind fills the
+   field from the URL; a body that also carries it is HTTP 400. The English
+   lists path values apart from the JSON body (see the fixture
+   `rename_event`: `PATCH /events/{id}/title`).
+3. **Non-ASCII in `schema.sql` / `queries/*.sql` is refused** at `-check`
+   (sqlc's SQLite parser can mis-tokenise an em dash in a comment).
+4. **Optional `// bridge-en-plural:`** on a domain type overrides the naive
+   last-word plural for list English.
+
+Paging is unchanged from 0.6: omit `after` for the first page (Bind fills
+`page.StartCursor`); `next_after: 0` means there is no next page — do not
+send that 0 back as `after` (the list fixture refuses `after <= 0` with F3).
+
+Move the pin and the binary to v0.7.0, run `bridge-en init -force`, then
+`-write` every slice and review the `.en` diff.
 
 ### 0.5.x to 0.6.0: deletes (Q10)
 

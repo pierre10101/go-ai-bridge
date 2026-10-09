@@ -194,6 +194,89 @@ func TestGETPathQueryDefaults(t *testing.T) {
 	}
 }
 
+// after=0 is passed through as 0 (not remapped to StartCursor). next_after: 0
+// means "last page"; a client that reused it as after would loop forever if
+// Bind treated 0 as the start of the list. Omit after for the first page.
+func TestGETAfterZeroIsPassedThrough(t *testing.T) {
+	mux := http.NewServeMux()
+	var got listIn
+	mux.Handle("GET /customers/{id}/invoices", Bind(Public, func(_ context.Context, in listIn) (out, error) {
+		got = in
+		return out{OK: true}, nil
+	}))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/customers/7/invoices?after=0", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if got.After != 0 {
+		t.Fatalf("after=0: got %d, want 0 (not StartCursor)", got.After)
+	}
+}
+
+type patchIn struct {
+	EventID int64  `json:"event_id" path:"id"`
+	Title   string `json:"title"`
+}
+
+// path:"..." on PATCH is filled from the URL; a body that also carries it is 400.
+func TestPATCHPathFromURL(t *testing.T) {
+	mux := http.NewServeMux()
+	var got patchIn
+	mux.Handle("PATCH /events/{id}/title", Bind(Public, func(_ context.Context, in patchIn) (out, error) {
+		got = in
+		return out{OK: true}, nil
+	}))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/events/9/title", strings.NewReader(`{"title":"Launch"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if got.EventID != 9 || got.Title != "Launch" {
+		t.Fatalf("got %+v", got)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/events/9/title", strings.NewReader(`{"event_id":3,"title":"x"}`)))
+	if rec.Code != BadInput.Status {
+		t.Fatalf("body with path field: status %d: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(PathBodyRule, "not sent in the body") || !strings.Contains(PathBodyWhen, "comes from the path") {
+		t.Fatal("PathBodyRule and PathBodyWhen must say what required does for path fields")
+	}
+}
+
+type pathOnlyIn struct {
+	EventID int64 `json:"event_id" path:"id"`
+}
+
+// A path-only non-GET still needs a JSON body: {} succeeds; a missing body is 400.
+func TestPATCHPathOnlyEmptyBody(t *testing.T) {
+	mux := http.NewServeMux()
+	var got pathOnlyIn
+	mux.Handle("DELETE /events/{id}", Bind(Public, func(_ context.Context, in pathOnlyIn) (out, error) {
+		got = in
+		return out{OK: true}, nil
+	}))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/events/9", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("{}: status %d: %s", rec.Code, rec.Body)
+	}
+	if got.EventID != 9 {
+		t.Fatalf("got %+v", got)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/events/9", nil))
+	if rec.Code != BadInput.Status {
+		t.Fatalf("missing body: status %d: %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/events/9", strings.NewReader(`{"event_id":3}`)))
+	if rec.Code != BadInput.Status {
+		t.Fatalf("body with path field: status %d: %s", rec.Code, rec.Body)
+	}
+}
+
 func TestGETBadLimitIs400(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /customers/{id}/invoices", Bind(Public, func(_ context.Context, in listIn) (out, error) {

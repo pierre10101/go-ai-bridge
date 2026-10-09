@@ -127,7 +127,8 @@ func TestF3_NonPositiveCursorIsRefused(t *testing.T) {
 }
 
 // Step 7: next_after is the last listed seq when the page is full, else 0;
-// following it walks every invoice exactly once and ends with 0.
+// following it walks every invoice exactly once and stops when next_after is 0.
+// Sending that 0 back as after is F3 (not a restart of the list).
 func TestNextAfterWalksEveryPageOnce(t *testing.T) {
 	a, conn := newAction(t)
 	seedInvoices(t, conn, 5)
@@ -143,6 +144,10 @@ func TestNextAfterWalksEveryPageOnce(t *testing.T) {
 			seen = append(seen, string(inv.InvoiceNumber))
 		}
 		if out.NextAfter == 0 {
+			_, err := handle(a, list_customer_invoices.Input{CustomerID: 1, After: 0, Limit: 2})
+			if !errors.Is(err, list_customer_invoices.F3) {
+				t.Fatalf("after=0 after last page: want F3, got %v", err)
+			}
 			break
 		}
 		if pages > 5 {

@@ -1,13 +1,23 @@
+# AGENTS.md (reference copy)
+
+This is the current `bridge-en init` workflow document, committed here so you
+can read the rules **before** installing a pinned binary. An app still runs
+`bridge-en init` (or `init -force` after upgrading): the copy written into the
+app is the one that matches its pin, and may differ from this file on an older
+or newer tag.
+
+---
+
 # AGENTS.md: how to change this app
 
 This file is for any AI coding agent (and any person) working in this
-repository. It was written by `bridge-en init` (bridge-en {{VERSION}}).
+repository. It was written by `bridge-en init` (bridge-en 0.7.0).
 
 The features of this app are written in a narrow Go + sqlc grammar. The tool
 `bridge-en` translates each feature, deterministically and without AI, into
 English (`<slice>.en`) that a person reviews. Code outside the grammar is
 refused. The rules are in `RULEBOOK.md` of the pinned version
-(https://github.com/pierre10101/go-ai-bridge/blob/v{{VERSION}}/RULEBOOK.md),
+(https://github.com/pierre10101/go-ai-bridge/blob/v0.7.0/RULEBOOK.md),
 and `bridge-en -grammar` prints them, one line per rule ID.
 
 ## 1. Install the pinned version
@@ -15,10 +25,10 @@ and `bridge-en -grammar` prints them, one line per rule ID.
 `go.mod` is the pin. Use the version it requires; never a different one.
 
 ```sh
-go get github.com/pierre10101/go-ai-bridge@v{{VERSION}}          # once, in a new app
+go get github.com/pierre10101/go-ai-bridge@v0.7.0          # once, in a new app
 go list -m github.com/pierre10101/go-ai-bridge                    # the pinned version
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v{{VERSION}}   # the same version
-bridge-en -version                                                # bridge-en {{VERSION}}
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.7.0   # the same version
+bridge-en -version                                                # bridge-en 0.7.0
 ```
 
 Import the runtime (`github.com/pierre10101/go-ai-bridge/runtime/...`). Never

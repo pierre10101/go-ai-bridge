@@ -186,6 +186,7 @@ var stepTemplates = map[string]string{
 	"count":           "Read: count the %s whose %s (query `%s` in %s).",
 	"row":             "Read: find a %s whose %s (query `%s` in %s); if several match, the first row returned is used. Call it the found %s.",
 	"page":            "Read: list the %s whose %s and whose `%s` is less than %s, highest `%s` first, at most %s of them (query `%s` in %s). Call them the listed %s; there may be none.",
+	"page bare":       "Read: list the %s whose `%s` is less than %s, highest `%s` first, at most %s of them (query `%s` in %s). Call them the listed %s; there may be none.",
 	"next cursor":     "Let the next cursor be the `%s` of the last listed %s if the page is full (there are %s listed %s), otherwise 0: there is no next page.",
 	"read return":     "End the read-only transaction, then answer HTTP %s with %s. If ending it fails, stop with HTTP %s.",
 	"insert":          "Write: add one %s to table `%s` with %s (query `%s` in %s). Call the stored row the new %s.",
@@ -247,6 +248,9 @@ var docSentences = map[string]string{
 	"no pre":          "None asserted.",
 	"get input":       "The request has no JSON body. It takes these values from the path and the query string:",
 	"get no input":    "The request has no JSON body and takes no value from the path or the query string.",
+	"empty body":      "The request body is one empty JSON object (`{}`).",
+	"path intro 1":    "The request takes this value from the path:",
+	"path intro n":    "The request takes these %d values from the path:",
 	"path field":      "`%s`, from the path (`{%s}`): %s.",
 	"query field":     "`%s`, from the query string (may be left out): %s.",
 	"page contract":   "Pages use keyset cursors, not OFFSET. A page has at most %[2]d rows; when `limit` is left out, at most %[3]d.",
@@ -279,9 +283,12 @@ The action "{{.Title}}" answers {{.Method}} {{.Path}}.
 
 {{.AccessLine}}
 
-{{.InputIntro}}
+{{if .PathIntro}}{{.PathIntro}}
+{{range .PathInput}}- {{.Line}}
+{{end}}
+{{end}}{{if .InputIntro}}{{.InputIntro}}
 {{range .BodyInput}}- {{.Line}}
-{{end}}{{if .InputRule}}{{.InputRule}}
+{{end}}{{end}}{{if .InputRule}}{{.InputRule}}
 {{end}}{{if .ServerSet}}
 {{.ServerIntro}}
 {{range .ServerSet}}- {{.Line}}

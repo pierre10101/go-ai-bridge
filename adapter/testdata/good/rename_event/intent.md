@@ -12,7 +12,7 @@ action runs: HTTP 401 when not signed in, HTTP 403 for any other role.
 Admins rename any event with Admin rename event instead.
 
 ## Inputs
-- `event_id` — the event to rename.
+- `event_id` — the event to rename, from the path (`{id}`); not in the body.
 - `title` — its new title, not empty.
 
 The signed-in user is set by the server; a request that sends `user` is a

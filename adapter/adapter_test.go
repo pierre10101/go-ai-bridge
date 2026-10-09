@@ -304,6 +304,15 @@ func TestSQLShapes(t *testing.T) {
 			t.Fatalf("refused Q5 page: %v shape=%v", errs, qs["Q"])
 		}
 	})
+	t.Run("ok/page bare", func(t *testing.T) {
+		qs, errs := loadOne(t, "-- name: Q :many\nSELECT id, title FROM books WHERE id < ? ORDER BY id DESC LIMIT ?;\n")
+		if len(errs) > 0 || qs["Q"] == nil || qs["Q"].bad || qs["Q"].Shape != "page" {
+			t.Fatalf("refused Q5 page with only cursor: %v shape=%v", errs, qs["Q"])
+		}
+		if len(qs["Q"].Where) != 0 || qs["Q"].CursorCol != "id" {
+			t.Fatalf("bare page: where=%v cursor=%q", qs["Q"].Where, qs["Q"].CursorCol)
+		}
+	})
 	refused := map[string]struct{ body, want string }{
 		"insert or ignore": {"INSERT OR IGNORE INTO invoices (seq) VALUES (?) RETURNING id;", "q.sql:2:8: refused: INSERT OR IGNORE is not in the allowed pattern list (query Q). Expected INTO after INSERT"},
 		"replace":          {"REPLACE INTO invoices (seq) VALUES (?) RETURNING id;", "q.sql:2:1: refused: REPLACE statement"},

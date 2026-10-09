@@ -57,6 +57,8 @@ func New(q *db.Queries) *Action {
 //
 // No preconditions: every value comes from the request (F1-F3) or the database.
 // httpx.Bind runs a GET in one read-only transaction (no write lock).
+// Bind maps a missing `after` to page.StartCursor before Handle runs; after=0
+// is refused here (F3) so a client that follows next_after: 0 cannot restart.
 func (a *Action) Handle(ctx context.Context, in Input) (Output, error) {
 	if !page.IsPageLimit(in.Limit) {
 		return Output{}, F2
