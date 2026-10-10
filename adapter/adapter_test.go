@@ -313,7 +313,17 @@ func TestSQLShapes(t *testing.T) {
 			t.Fatalf("bare page: where=%v cursor=%q", qs["Q"].Where, qs["Q"].CursorCol)
 		}
 	})
+	t.Run("ok/page join", func(t *testing.T) {
+		qs, errs := loadOne(t, "-- name: Q :many\nSELECT sections.id, sections.name, events.title\nFROM sections\nJOIN events ON sections.event_id = events.id\nWHERE sections.event_id = ? AND sections.id < ?\nORDER BY sections.id DESC\nLIMIT ?;\n")
+		if len(errs) > 0 || qs["Q"] == nil || qs["Q"].bad || qs["Q"].Shape != "page" {
+			t.Fatalf("refused Q5 page with JOIN: %v shape=%v", errs, qs["Q"])
+		}
+		if qs["Q"].JoinTable != "events" || qs["Q"].JoinFK != "event_id" || qs["Q"].JoinPK != "id" {
+			t.Fatalf("join: %+v", qs["Q"])
+		}
+	})
 	refused := map[string]struct{ body, want string }{
+		"left join":        {"SELECT sections.id FROM sections LEFT JOIN events ON sections.event_id = events.id WHERE sections.id < ? ORDER BY sections.id DESC LIMIT ?;", "LEFT JOIN"},
 		"insert or ignore": {"INSERT OR IGNORE INTO invoices (seq) VALUES (?) RETURNING id;", "q.sql:2:8: refused: INSERT OR IGNORE is not in the allowed pattern list (query Q). Expected INTO after INSERT"},
 		"replace":          {"REPLACE INTO invoices (seq) VALUES (?) RETURNING id;", "q.sql:2:1: refused: REPLACE statement"},
 		"update returning": {"UPDATE customers SET name = ? WHERE id = ? RETURNING id;", "q.sql:2:44: refused: RETURNING on an UPDATE"},
@@ -330,7 +340,7 @@ func TestSQLShapes(t *testing.T) {
 		"delete limit":     {"DELETE FROM customers WHERE id = ? LIMIT 1;", "q.sql:2:36: refused: LIMIT"},
 		"delete subquery":  {"DELETE FROM customers WHERE id = (SELECT 1);", "q.sql:2:34: refused: subquery"},
 		"with":             {"WITH c AS (SELECT 1) SELECT COUNT(*) FROM c WHERE id = ?;", "q.sql:2:1: refused: WITH (common table expression)"},
-		"join":             {"SELECT seq FROM invoices JOIN customers ON customers.id = invoices.customer_id WHERE seq = ?;", "q.sql:2:26: refused: JOIN"},
+		"join":             {"SELECT seq FROM invoices JOIN customers ON customers.id = invoices.customer_id WHERE seq = ?;", "JOIN in a non-page SELECT"},
 		"or":               {"SELECT COUNT(*) FROM customers WHERE id = ? OR name = ?;", "q.sql:2:45: refused: OR in WHERE"},
 		"select star":      {"SELECT * FROM customers WHERE id = ?;", "q.sql:2:8: refused: SELECT *"},
 		"no where":         {"SELECT COUNT(*) FROM customers;", "q.sql:2:31: refused: end of statement is not in the allowed pattern list (query Q). Expected WHERE after FROM customers"},

@@ -5,6 +5,6 @@ module example.com/childbad
 
 go 1.24.0
 
-require github.com/pierre10101/go-ai-bridge v0.7.0
+require github.com/pierre10101/go-ai-bridge v0.8.0
 
 replace github.com/pierre10101/go-ai-bridge => ../../../..

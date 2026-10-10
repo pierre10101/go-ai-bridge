@@ -80,7 +80,7 @@ func addSlice(t *testing.T, root, fixture, name string, edits ...string) string 
 // is limited to the caller's own rows, exactly.
 func TestOwnershipEnglish(t *testing.T) {
 	for dir, want := range map[string]string{
-		renameFixture: "on each event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `RenameOwnEvent` in queries/rename_own_event.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same event. " +
+		renameFixture: "on each event only if `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `RenameOwnEvent` in queries/rename_own_event.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same event. " +
 			"Ownership: only events you own (`organizer_id` is the signed-in user) can be changed by this step. If the query fails, stop with HTTP 500 Internal Server Error.\n",
 		adminRenameFixture: "Ownership: this step is not limited to events you own (`organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. If the query fails",
 		eventFixture: "Call the stored row the new event. Ownership: the new event is yours (`organizer_id` is the signed-in user) " +

@@ -105,6 +105,7 @@ type walker struct {
 	writes        []int               // step numbers of writes so far
 	wrote         map[int]string      // write step -> what it may have changed by now: wroteSome or wroteMaybe
 	readAt        map[string]int      // W1: table -> step of the first read query (Q1, Q2, Q5) of it
+	proved        map[string]int      // table -> step of a Q6 claim whose S10 already proved a row of it
 	sliceField    string              // the list input (Go field name) passed to the current query's Q7 IN list
 	args          map[string]ast.Expr // the Go value passed for each SQL parameter of the current query
 	asserts       []string            // domain assertions met while rendering the current statement
@@ -132,6 +133,10 @@ type local struct {
 	nested  int      // changed: the line of the first guard that tests the check inside a compound condition
 	added   bool     // changed: a Q8 insert from a parent row (adds one row or none), not a Q6 update
 	deleted bool     // changed: a Q10 delete (removes rows), not a Q6 update
+	source  string   // Q8: the parent table of INSERT…SELECT (for unreachable-S10 hints)
+	// needsNoRows: a Q8 insert with RETURNING (:one); S10 maps sql.ErrNoRows.
+	needsNoRows   bool
+	noRowsChecked bool
 }
 
 // countKey turns a template key about a claim's changed rows ("changed
@@ -169,7 +174,7 @@ func ParseAction(dir string) (*Feature, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &walker{fset: fset, env: e, f: &Feature{Dir: dir, env: e}, fids: map[string]*FailureCase{}, pkgs: map[string]bool{}, readAt: map[string]int{}, wrote: map[int]string{}}
+	w := &walker{fset: fset, env: e, f: &Feature{Dir: dir, env: e}, fids: map[string]*FailureCase{}, pkgs: map[string]bool{}, readAt: map[string]int{}, wrote: map[int]string{}, proved: map[string]int{}}
 	w.errs = append(w.errs, sqlErrs...)
 	w.decls(file)
 	if len(w.errs) > 0 {
@@ -276,6 +281,10 @@ func (w *walker) importSpec(pkg string, is *ast.ImportSpec) {
 	switch {
 	case path == "context":
 		name = "context"
+	case path == "database/sql":
+		name = "sql" // Q8+:one maps sql.ErrNoRows (S10)
+	case path == "errors":
+		name = "errors" // Q8+:one: errors.Is(err, sql.ErrNoRows)
 	case path == "net/http":
 		name = "http"
 	case path == "time":
@@ -296,7 +305,7 @@ func (w *walker) importSpec(pkg string, is *ast.ImportSpec) {
 	}
 	if name == "" {
 		w.refuse(is, fmt.Sprintf("import %q", path), "D2 imports",
-			"Allowed: context, net/http, "+RuntimePath+"/{assert,failure,page,httpx}, <module>/internal/domain, <module>/features/"+pkg+"/db")
+			"Allowed: context, database/sql, errors, net/http, "+RuntimePath+"/{assert,failure,page,httpx}, <module>/internal/domain, <module>/features/"+pkg+"/db")
 		return
 	}
 	w.pkgs[name] = true

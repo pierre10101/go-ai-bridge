@@ -43,7 +43,7 @@ func TestClockComparisonWording(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "on each seat whose `id` is the request's `seat_id` and (`held_by` is 0 or " + tc.want + ") at that moment"
+			want := "on each seat only if `id` is the request's `seat_id` and (`held_by` is 0 or " + tc.want + ") at that moment"
 			if !strings.Contains(got, want) {
 				t.Fatalf("want %q in:\n%s", want, got)
 			}
@@ -314,5 +314,33 @@ func TestClockInReadShapes(t *testing.T) {
 		if len(errs) == 0 || !strings.Contains(errs.Error(), tc.want) {
 			t.Fatalf("%s: want %q in %v", name, tc.want, errs)
 		}
+	}
+}
+
+// TestClockOffsetInAction: E5 lets the answer echo a deadline with
+// in.Now + <seconds> or in.Now - <seconds>, said like a Q6 clock offset.
+func TestClockOffsetInAction(t *testing.T) {
+	const fixture = "testdata/good/claim_example"
+	dir := filepath.Join(moduleTempDir(t), "claim_example")
+	copyDir(t, fixture, dir)
+	src, err := os.ReadFile(filepath.Join(dir, "action.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := strings.Replace(string(src),
+		"type Output struct {\n\tSeatID int64 `json:\"seat_id\"`\n\tNow    int64 `json:\"now\"`\n}",
+		"type Output struct {\n\tSeatID    int64 `json:\"seat_id\"`\n\tNow       int64 `json:\"now\"`\n\tExpiresAt int64 `json:\"expires_at\"`\n}", 1)
+	mutated = strings.Replace(mutated,
+		"out := Output{SeatID: in.SeatID, Now: in.Now}",
+		"out := Output{SeatID: in.SeatID, Now: in.Now, ExpiresAt: in.Now + 600}", 1)
+	if err := os.WriteFile(filepath.Join(dir, "action.go"), []byte(mutated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Render(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "`expires_at` = 10 minutes after the current time"; !strings.Contains(got, want) {
+		t.Fatalf("want %q in:\n%s", want, got)
 	}
 }

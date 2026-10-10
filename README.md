@@ -65,11 +65,11 @@ GitHub release binary) over `go install` — compiling sqlc from source pulls
 ```sh
 mkdir seat-app && cd seat-app && git init -q
 go mod init example.com/seat-app
-go get github.com/pierre10101/go-ai-bridge@v0.7.0
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.7.0
+go get github.com/pierre10101/go-ai-bridge@v0.8.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.8.0
 # sqlc: https://github.com/sqlc-dev/sqlc/releases (v1.31.1), or the slow path:
 # go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-bridge-en -version                      # bridge-en 0.7.0
+bridge-en -version                      # bridge-en 0.8.0
 ```
 
 **2. Init.** Writes the instructions for AI agents (and you). Documents only,
@@ -216,7 +216,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0   # the version go.mod pins
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.8.0   # the version go.mod pins
       - run: go test ./...
       - run: bridge-en -check features/*/
   english:
@@ -230,8 +230,8 @@ jobs:
         with: { fetch-depth: 0 }    # the comment diffs against the PR's base
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.7.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.8.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.8.0
         # with: { features: "features/*/", max-chars: "60000" }
 ```
 
@@ -262,6 +262,26 @@ git diff                         # review every .en change, then open a PR
 A new version can change the English of every feature (new wording, new
 rules); the `.en` diff in that pull request shows exactly how.
 
+### 0.7.x to 0.8.0: clock arithmetic, Q8 RETURNING, Q5 JOIN reads
+
+0.8.0 is **mostly additive**. Apps that already pass `bridge-en -check` on
+0.7 stay accepted; regenerate English (`bridge-en -write features/*/`) and
+review the diff:
+
+1. **E5 clock arithmetic** — `in.Now + <seconds>` / `in.Now - <seconds>` in
+   the answer (a positive whole-number literal), matching how Q6 says offsets.
+2. **Q8 with `RETURNING`** — insert from a parent row may use `:one` and map
+   `sql.ErrNoRows` to a failure (see `add_section`).
+3. **Q5 with one INNER JOIN** — a keyset page may join the parent once to
+   return columns from it (see `list_event_sections`).
+4. **S10 on unreachable Q8** — after a Q6 claim already proved the parent
+   row, bridge-en refuses an `!= 1` guard on a later Q8 from that parent
+   (reorder writes or drop the failure case).
+5. **Claim English** — Q6 steps say "Update:" instead of "Claim:".
+
+Move the pin and the binary to v0.8.0, run `bridge-en init -force`, then
+`-write` every slice.
+
 ### 0.6.x to 0.7.0: lists, path inputs
 
 0.7.0 is **mostly additive**. Apps that already compile against 0.6 stay
@@ -284,7 +304,7 @@ Paging is unchanged from 0.6: omit `after` for the first page (Bind fills
 `page.StartCursor`); `next_after: 0` means there is no next page — do not
 send that 0 back as `after` (the list fixture refuses `after <= 0` with F3).
 
-Move the pin and the binary to v0.7.0, run `bridge-en init -force`, then
+Move the pin and the binary to v0.8.0, run `bridge-en init -force`, then
 `-write` every slice and review the `.en` diff.
 
 ### 0.5.x to 0.6.0: deletes (Q10)

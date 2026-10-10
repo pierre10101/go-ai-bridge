@@ -17,15 +17,16 @@ const handleSig = "func (a *Action) Handle(ctx context.Context, in Input) (Outpu
 
 // Statement kinds (S-patterns).
 const (
-	kPre     = "S1"
-	kGuard   = "S2"
-	kQuery   = "S3"
-	kErrRet  = "S4"
-	kLet     = "S5"
-	kPost    = "S6"
-	kReturn  = "S7"
-	kMapEach = "S8"
-	kNext    = "S9"
+	kPre          = "S1"
+	kGuard        = "S2"
+	kQuery        = "S3"
+	kErrRet       = "S4"
+	kErrRetNoRows = "S4nr" // Q8+:one: if err != nil { if errors.Is(err, sql.ErrNoRows) { return Fn }; return err }
+	kLet          = "S5"
+	kPost         = "S6"
+	kReturn       = "S7"
+	kMapEach      = "S8"
+	kNext         = "S9"
 )
 
 func st(key string) string { return stepTemplates[key] }
@@ -85,13 +86,30 @@ walk:
 			w.guard(s.(*ast.IfStmt))
 		case kQuery:
 			phase = 1
-			w.query(s.(*ast.AssignStmt))
-			if i+1 < len(stmts) && w.classify(stmts[i+1]) == kErrRet {
+			as := s.(*ast.AssignStmt)
+			w.query(as)
+			var loc *local
+			if id, ok := as.Lhs[0].(*ast.Ident); ok {
+				loc = w.locals[id.Name]
+			}
+			if i+1 >= len(stmts) {
+				w.refuse(s, "query whose error is not checked", "S3 query", "Follow it with S4: if err != nil { return Output{}, err }")
+				break
+			}
+			switch w.classify(stmts[i+1]) {
+			case kErrRet:
 				i++
-			} else {
+				if loc != nil && loc.needsNoRows {
+					w.refuse(stmts[i], "insert from a parent row with RETURNING whose sql.ErrNoRows is not mapped to a failure", "S10 claim check",
+						"After a Q8 insert with RETURNING (:one), map no row: if err != nil { if errors.Is(err, sql.ErrNoRows) { return Output{}, F<n> }; return Output{}, err }")
+				}
+			case kErrRetNoRows:
+				i++
+				w.errNoRows(stmts[i].(*ast.IfStmt), loc)
+			default:
 				w.refuse(s, "query whose error is not checked", "S3 query", "Follow it with S4: if err != nil { return Output{}, err }")
 			}
-		case kErrRet:
+		case kErrRet, kErrRetNoRows:
 			w.refuse(s, "error return without a query just before it", "S4 error return", "S4 only directly follows S3")
 		case kLet:
 			phase = 1
@@ -326,7 +344,13 @@ func (w *walker) classify(s ast.Stmt) string {
 			}
 		}
 	case *ast.IfStmt:
-		if s.Init != nil || s.Else != nil || len(s.Body.List) != 1 {
+		if s.Init != nil || s.Else != nil {
+			return ""
+		}
+		if len(s.Body.List) == 2 && types.ExprString(s.Cond) == "err != nil" && w.isErrNoRowsMap(s) {
+			return kErrRetNoRows
+		}
+		if len(s.Body.List) != 1 {
 			return ""
 		}
 		ret, ok := s.Body.List[0].(*ast.ReturnStmt)
@@ -555,11 +579,19 @@ func (w *walker) stopStates(cond ast.Expr) map[int]string {
 func (w *walker) passGuard(cond ast.Expr) {
 	if loc := w.isClaimCheck(cond); loc != nil {
 		w.wrote[loc.step] = wroteSome // S10: exactly one row; S11: one row per entry of the list (at least one, D10)
+		// A Q6 claim that changed one row of P proves a P row exists for later
+		// Q8 inserts from P (issue #16: that Q8's != 1 would be unreachable).
+		if !loc.added && !loc.deleted && !loc.needsNoRows {
+			w.proved[loc.table] = loc.step
+		}
 		return
 	}
 	loc, op, v := w.changedCheck(cond)
 	if loc != nil && op == token.EQL && v == "0" {
 		w.wrote[loc.step] = wroteSome
+		if !loc.added && !loc.deleted && !loc.needsNoRows {
+			w.proved[loc.table] = loc.step
+		}
 	}
 }
 
@@ -629,6 +661,7 @@ func (w *walker) guard(s *ast.IfStmt) {
 	cond := w.cond(s.Cond)
 	if loc := w.isClaimCheck(s.Cond); loc != nil {
 		loc.checked = true // S10/S11: the guard's entire condition is the check
+		w.refuseUnreachableQ8(s, loc)
 	} else {
 		w.markNested(s.Cond)
 	}
@@ -644,6 +677,22 @@ func (w *walker) guard(s *ast.IfStmt) {
 	w.domainNote(step)
 	w.rolledBack(step, stop)
 	w.passGuard(s.Cond)
+}
+
+// refuseUnreachableQ8 refuses an S10 on a Q8 insert from parent P when an
+// earlier Q6 claim of P already passed its S10: after that claim, the insert
+// always adds one row, so the Q8's "not exactly one" failure cannot fire
+// (issue #16). Reorder: Q8 first (reachable 404), then the claim.
+func (w *walker) refuseUnreachableQ8(at ast.Node, loc *local) {
+	if !loc.added || loc.source == "" {
+		return
+	}
+	prior, ok := w.proved[loc.source]
+	if !ok {
+		return
+	}
+	w.refuse(at, fmt.Sprintf("S10 guard on an insert from %s that is unreachable after step %d already proved a %s row", loc.source, prior, singular(loc.source)), "S10 claim check",
+		"Reorder the writes: run the insert from the parent row first (its != 1 is the reachable 404 when there is no such parent of yours), then the claim on the parent; or drop this failure case from intent.md and action.go")
 }
 
 // markNested remembers, for the refusal of a claim no guard checks, a guard
@@ -737,10 +786,25 @@ func (w *walker) query(s *ast.AssignStmt) {
 		limitEn := w.sqlValue(q.Limit, vals, "limit", q.Table)
 		cursorEn := w.sqlValue(q.CursorVal, vals, q.CursorCol, q.Table)
 		loc.limit = limitEn
+		with := ""
+		if q.JoinTable != "" {
+			var parentCols []string
+			prefix := q.JoinTable + "."
+			for _, c := range q.Cols {
+				if strings.HasPrefix(c, prefix) {
+					parentCols = append(parentCols, "`"+strings.TrimPrefix(c, prefix)+"`")
+				}
+			}
+			if len(parentCols) > 0 {
+				with = fmt.Sprintf(st("page with"), article(singular(q.JoinTable)), joinList(parentCols))
+			} else {
+				with = fmt.Sprintf(st("page join"), article(singular(q.JoinTable)))
+			}
+		}
 		if eq := where("where is"); eq == "" {
-			text = fmt.Sprintf(st("page bare"), plural(q.Table), q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table))
+			text = fmt.Sprintf(st("page bare"), plural(q.Table), with, q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table))
 		} else {
-			text = fmt.Sprintf(st("page"), plural(q.Table), eq, q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table))
+			text = fmt.Sprintf(st("page"), plural(q.Table), with, eq, q.CursorCol, cursorEn, q.CursorCol, limitEn, q.Name, q.File, plural(q.Table))
 		}
 		fails = fmt.Sprintf(st("query fails"), w.internal())
 		w.f.hasPageQuery = true
@@ -748,6 +812,26 @@ func (w *walker) query(s *ast.AssignStmt) {
 			w.refuse(s, fmt.Sprintf("query %s with LIMIT %d", q.Name, q.LimitN), "Q5 keyset page", fmt.Sprintf("LIMIT must be 1..%d (page.MaxPageSize)", max))
 		}
 	case "insert":
+		if q.Source != "" { // Q8 with RETURNING: one row from a parent row, or sql.ErrNoRows
+			*loc = local{kind: "row", table: q.Table, phrase: fmt.Sprintf(t("new row"), singular(q.Table)), cols: q.Cols,
+				stmt: s, needsNoRows: true, added: true, source: q.Source}
+			assigns := make([]string, len(q.Values))
+			for i, v := range q.Values {
+				val := w.sqlValue(v.Val, vals, v.Col, q.Table)
+				if v.Val.Kind == "col" {
+					val = fmt.Sprintf(t("row field"), singular(q.Source), v.Val.Lit)
+				}
+				assigns[i] = fmt.Sprintf(t("field"), v.Col, val)
+			}
+			conds := make([]string, len(q.Conds))
+			for i, c := range q.Conds {
+				conds[i] = w.claimCond(c, vals, q.Source)
+			}
+			text = fmt.Sprintf(st("claim insert"), singular(q.Table), q.Table, joinList(assigns), article(singular(q.Source)), strings.Join(conds, " and "), q.Name, q.File, singular(q.Source), singular(q.Table))
+			text += " " + fmt.Sprintf(st("claim insert row"), singular(q.Table))
+			fails = fmt.Sprintf(st("query fails"), w.internal())
+			break
+		}
 		*loc = local{kind: "row", table: q.Table, phrase: fmt.Sprintf(t("new row"), singular(q.Table)), cols: q.Cols}
 		assigns := make([]string, len(q.Values))
 		for i, v := range q.Values {
@@ -756,7 +840,7 @@ func (w *walker) query(s *ast.AssignStmt) {
 		text, fails = fmt.Sprintf(st("insert"), singular(q.Table), q.Table, joinList(assigns), q.Name, q.File, singular(q.Table)),
 			fmt.Sprintf(st("insert fails"), w.internal())
 	case "claim":
-		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField, added: q.Source != "", deleted: q.Delete}
+		*loc = local{kind: "changed", table: q.Table, stmt: s, multi: q.Slice != "", list: w.sliceField, added: q.Source != "", deleted: q.Delete, source: q.Source}
 		if q.Delete { // Q10: remove the rows the WHERE names by key
 			conds := make([]string, len(q.Conds))
 			for i, c := range q.Conds {
@@ -844,13 +928,78 @@ func (w *walker) query(s *ast.AssignStmt) {
 	if len(q.Writes) > 0 {
 		w.writes = append(w.writes, step.N)
 		w.wrote[step.N] = wroteSome // an insert that succeeded stored its row
-		if q.Shape == "claim" {
+		if q.Shape == "claim" || loc.needsNoRows {
 			w.wrote[step.N] = wroteMaybe // until a guard checks how many rows changed (S10)
 		}
 		if w.f.Method == "GET" {
 			w.refuse(s, "write query "+q.Name+" in a GET action", "S3 query", "A GET runs in a read-only transaction (ReadTxRule); writes belong in a POST action")
 		}
 	}
+}
+
+// isErrNoRowsMap reports whether s is the S4+S10 form for a Q8 insert with
+// RETURNING: if err != nil { if errors.Is(err, sql.ErrNoRows) { return Output{}, F<n> }; return Output{}, err }.
+func (w *walker) isErrNoRowsMap(s *ast.IfStmt) bool {
+	if !w.pkgs["errors"] || !w.pkgs["sql"] {
+		return false
+	}
+	inner, ok := s.Body.List[0].(*ast.IfStmt)
+	if !ok || inner.Init != nil || inner.Else != nil || len(inner.Body.List) != 1 {
+		return false
+	}
+	if !isErrorsIsErrNoRows(inner.Cond) {
+		return false
+	}
+	ret, ok := inner.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 2 || !isEmptyOutput(ret.Results[0]) {
+		return false
+	}
+	id, ok := ret.Results[1].(*ast.Ident)
+	if !ok || w.fids[id.Name] == nil {
+		return false
+	}
+	ret2, ok := s.Body.List[1].(*ast.ReturnStmt)
+	if !ok || len(ret2.Results) != 2 || !isEmptyOutput(ret2.Results[0]) {
+		return false
+	}
+	return types.ExprString(ret2.Results[1]) == "err"
+}
+
+func isErrorsIsErrNoRows(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) != 2 {
+		return false
+	}
+	return types.ExprString(call.Fun) == "errors.Is" &&
+		types.ExprString(call.Args[0]) == "err" &&
+		types.ExprString(call.Args[1]) == "sql.ErrNoRows"
+}
+
+// errNoRows renders the S10 mapping of sql.ErrNoRows after a Q8+:one insert.
+func (w *walker) errNoRows(s *ast.IfStmt, loc *local) {
+	if loc == nil || !loc.needsNoRows {
+		w.refuse(s, "sql.ErrNoRows mapping without a Q8 insert with RETURNING just before it", "S10 claim check",
+			"Map sql.ErrNoRows only after a Q8 insert from a parent row with RETURNING (:one)")
+		return
+	}
+	inner := s.Body.List[0].(*ast.IfStmt)
+	id := inner.Body.List[0].(*ast.ReturnStmt).Results[1].(*ast.Ident).Name
+	fc := w.fids[id]
+	cond := fmt.Sprintf(t("added none"), singular(loc.table), loc.step)
+	step := w.addStep("guard", fmt.Sprintf(st("guard"), cond, fc.ID, statusPhrase(fc.Status), fc.Message))
+	fc.steps = append(fc.steps, step.N)
+	stop := make(map[int]string, len(w.wrote))
+	for k, v := range w.wrote {
+		stop[k] = v
+	}
+	stop[loc.step] = wroteNone
+	if when := w.whenAt(stop); when > fc.when {
+		fc.when = when
+	}
+	w.rolledBack(step, stop)
+	w.wrote[loc.step] = wroteSome
+	loc.noRowsChecked = true
+	w.refuseUnreachableQ8(s, loc)
 }
 
 // paramValues maps each SQL parameter of q to the rendered Go value passed for it.
@@ -968,8 +1117,12 @@ func goName(p string) string {
 // matchName finds the SQL name that a Go field name stands for (CustomerID ~ customer_id).
 func matchName(sqlNames []string, goName string) string {
 	for _, n := range sqlNames {
-		if norm(n) == norm(goName) {
-			return n
+		base := n
+		if i := strings.LastIndex(n, "."); i >= 0 {
+			base = n[i+1:]
+		}
+		if norm(base) == norm(goName) {
+			return base
 		}
 	}
 	return ""

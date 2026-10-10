@@ -104,10 +104,12 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
 - **Child rows prove their parent is yours (A5).** For a table declared
   `-- owner: event_id -> events.organizer_id`, the statement that writes
   proves the parent row is the signed-in user's. An INSERT is an insert
-  from the parent row (Q8, `:execrows`, then `if n != 1 { return Output{},
-  F<n> }`): `INSERT INTO sections (event_id, name) SELECT events.id,
-  sqlc.arg(name) FROM events WHERE events.id = sqlc.arg(event_id) AND
-  events.organizer_id = sqlc.arg(organizer_id)`. An UPDATE adds the proof
+  from the parent row (Q8): without `RETURNING`, `:execrows` then
+  `if n != 1 { return Output{}, F<n> }`; with `RETURNING id`, `:one` and
+  `if err != nil { if errors.Is(err, sql.ErrNoRows) { return Output{}, F<n> };
+  return Output{}, err }`: `INSERT INTO sections (event_id, name) SELECT events.id,
+  sqlc.arg(name) FROM events WHERE events.id = sqlc.arg(event_id)
+  AND events.organizer_id = sqlc.arg(organizer_id)`. An UPDATE adds the proof
   subquery (Q9): `AND sections.event_id IN (SELECT events.id FROM events
   WHERE events.organizer_id = sqlc.arg(organizer_id))` and never sets
   `event_id`. Pass `OrganizerID: in.User`, and name every column with its

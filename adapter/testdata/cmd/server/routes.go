@@ -28,6 +28,8 @@ import (
 	summarydb "example.com/fixtures/features/event_summary/db"
 	"example.com/fixtures/features/list_customer_invoices"
 	listdb "example.com/fixtures/features/list_customer_invoices/db"
+	"example.com/fixtures/features/list_event_sections"
+	listeventdb "example.com/fixtures/features/list_event_sections/db"
 	"example.com/fixtures/features/my_events"
 	myeventsdb "example.com/fixtures/features/my_events/db"
 	"example.com/fixtures/features/release_example"
@@ -67,6 +69,7 @@ func Routes(db *sql.DB, identity httpx.Identity) http.Handler {
 	mux.Handle(delete_section.Route, httpx.Bind(delete_section.Roles, delete_section.New(deletesectiondb.New(txn.DB(db))).Handle))
 	mux.Handle(event_summary.Route, httpx.Bind(event_summary.Roles, event_summary.New(summarydb.New(txn.DB(db))).Handle))
 	mux.Handle(list_customer_invoices.Route, httpx.Bind(list_customer_invoices.Roles, list_customer_invoices.New(listdb.New(txn.DB(db))).Handle))
+	mux.Handle(list_event_sections.Route, httpx.Bind(list_event_sections.Roles, list_event_sections.New(listeventdb.New(txn.DB(db))).Handle))
 	mux.Handle(my_events.Route, httpx.Bind(my_events.Roles, my_events.New(myeventsdb.New(txn.DB(db))).Handle))
 	mux.Handle(release_example.Route, httpx.Bind(release_example.Roles, release_example.New(releasedb.New(txn.DB(db))).Handle))
 	mux.Handle(rename_event.Route, httpx.Bind(rename_event.Roles, rename_event.New(renamedb.New(txn.DB(db))).Handle))
