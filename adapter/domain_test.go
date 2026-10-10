@@ -152,6 +152,36 @@ func TestDomainUnderGrammar(t *testing.T) {
 	}
 }
 
+// TestUnknownDomainFieldNamesTheType: a domain literal that names a field the
+// type no longer has (rename leftover) says "unknown field", not "without a
+// json tag" (issue #21).
+func TestUnknownDomainFieldNamesTheType(t *testing.T) {
+	dir := copyModule(t, map[string]func(string) string{
+		"features/create_invoice/action.go": func(s string) string {
+			old := "domain.Money{Cents: row.AmountCents, Currency: row.Currency}"
+			neu := "domain.Money{LentTo: row.AmountCents, Currency: row.Currency}"
+			if !strings.Contains(s, old) {
+				t.Fatalf("action no longer contains %q", old)
+			}
+			return strings.Replace(s, old, neu, 1)
+		},
+	})
+	_, err := Render(dir)
+	if err == nil {
+		t.Fatal("rendered; want refusal")
+	}
+	got := err.Error()
+	if !strings.Contains(got, `unknown field "LentTo" for domain.Money`) {
+		t.Fatalf("want unknown-field refusal, got:\n%s", got)
+	}
+	if !strings.Contains(got, "domain.Money has: Cents, Currency") {
+		t.Fatalf("want the type's current fields listed, got:\n%s", got)
+	}
+	if strings.Contains(got, "without a json tag") {
+		t.Fatalf("must not blame a missing json tag:\n%s", got)
+	}
+}
+
 // TestDomainRendering pins the English of each M3 construct.
 func TestDomainRendering(t *testing.T) {
 	cases := map[string]string{

@@ -83,8 +83,9 @@ func TestOwnershipEnglish(t *testing.T) {
 		renameFixture: "on each event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `RenameOwnEvent` in queries/rename_own_event.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same event. " +
 			"Ownership: only events you own (`organizer_id` is the signed-in user) can be changed by this step. If the query fails, stop with HTTP 500 Internal Server Error.\n",
 		adminRenameFixture: "Ownership: this step is not limited to events you own (`organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. If the query fails",
-		eventFixture:       "Call the stored row the new event. Ownership: the new event is yours (`organizer_id` is the signed-in user). If the query fails",
-		myEventsFixture:    "(query `CountMyEvents` in queries/count_events.sql). Ownership: only events you own (`organizer_id` is the signed-in user) are read. If the query fails",
+		eventFixture: "Call the stored row the new event. Ownership: the new event is yours (`organizer_id` is the signed-in user) " +
+			"(role `admin` bypasses ownership, but this action is also open to `organizer`, so every write is limited to the signed-in user's rows). If the query fails",
+		myEventsFixture: "(query `CountMyEvents` in queries/count_events.sql). Ownership: only events you own (`organizer_id` is the signed-in user) are read. If the query fails",
 	} {
 		got, err := Render(dir)
 		if err != nil {
@@ -94,8 +95,17 @@ func TestOwnershipEnglish(t *testing.T) {
 			t.Errorf("%s: want %q in:\n%s", dir, want, got)
 		}
 	}
+	// Mixed Roles: a bypass role listed with a non-bypass role does not bypass.
+	got, err := Render(inFixtureApp(t, renameFixture, "rename_event",
+		"action.go", `httpx.Roles("organizer")`, `httpx.Roles("organizer", "admin")`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Ownership: only events you own (`organizer_id` is the signed-in user) can be changed by this step (role `admin` bypasses ownership, but this action is also open to `organizer`, so every write is limited to the signed-in user's rows)."; !strings.Contains(got, want) {
+		t.Errorf("mixed Roles: want %q in:\n%s", want, got)
+	}
 	// A read that is not limited to the caller's rows is allowed, and says so.
-	got, err := Render(inFixtureApp(t, summaryFixture, "event_summary",
+	got, err = Render(inFixtureApp(t, summaryFixture, "event_summary",
 		"queries/count.sql", "WHERE id = sqlc.arg(id) AND organizer_id = sqlc.arg(organizer_id)", "WHERE id = sqlc.arg(id)",
 		"action.go", "db.CountOwnEventParams{ID: in.EventID, OrganizerID: in.User}", "db.CountOwnEventParams{ID: in.EventID}"))
 	if err != nil {

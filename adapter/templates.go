@@ -133,17 +133,25 @@ var exprTemplates = map[string]string{
 	"where sub":     "`%s` is the `%s` of %s whose %s",
 	"where has sub": "`%s` equal to the `%s` of %s whose %s",
 	// A4 ownership: what a step on an owned table says (see owner.go).
-	"owned update":   "Ownership: only %s you own (`%s` is the signed-in user) can be changed by this step.",
-	"owned delete":   "Ownership: only %s you own (`%s` is the signed-in user) can be deleted by this step.",
-	"owned insert":   "Ownership: the new %s is yours (`%s` is the signed-in user).",
+	"owned update":   "Ownership: only %s you own (`%s` is the signed-in user) can be changed by this step",
+	"owned delete":   "Ownership: only %s you own (`%s` is the signed-in user) can be deleted by this step",
+	"owned insert":   "Ownership: the new %s is yours (`%s` is the signed-in user)",
 	"owned read":     "Ownership: only %s you own (`%s` is the signed-in user) are read.",
 	"unowned read":   "Ownership: this read is not limited to %s you own (`%s` is not compared with the signed-in user).",
 	"bypass write":   "Ownership: this step is not limited to %s you own (`%s` need not be the signed-in user), because only role %s may call this action and cmd/server declares that it bypasses ownership.",
 	"bypass write n": "Ownership: this step is not limited to %s you own (`%s` need not be the signed-in user), because only roles %s may call this action and cmd/server declares that they bypass ownership.",
+	// Appended to an owner-scoped write when Roles mixes bypass and non-bypass
+	// roles (A4): the bypass is then inactive for this action. ownedWrite adds
+	// the final period after this note.
+	"mixed note":        " (%s, but this action is also open to %s, so every write is limited to the signed-in user's rows)",
+	"mixed bypass one":  "role %s bypasses ownership",
+	"mixed bypass n":    "roles %s bypass ownership",
+	"mixed limited one": "%s",
+	"mixed limited n":   "%s",
 	// A5 inherited ownership: a child table's rows are yours through their
 	// parent; the update, read and bypass sentences above take "sections of
 	// events" and "events.organizer_id".
-	"child insert": "Ownership: the new %s is added only to %s you own (`%s` is the signed-in user); for any other %s nothing is written.",
+	"child insert": "Ownership: the new %s is added only to %s you own (`%s` is the signed-in user); for any other %s nothing is written",
 	"of":           "%s of %s",
 	"a":            "a %s",
 	"an":           "an %s",

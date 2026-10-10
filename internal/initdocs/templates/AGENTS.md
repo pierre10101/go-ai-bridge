@@ -87,9 +87,12 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
   httpx.Roles("<role>", ...)` or `var Roles = httpx.Public`; the runtime
   answers 401 (not signed in) or 403 (role not listed) before the action
   runs. Never check a role inside `Handle` instead.
-- **Owned rows are written only in their owner's name (A4).** For a table
-  declared `-- owner: organizer_id` in `schema.sql`, an action that a
-  non-admin role may call limits every write to the signed-in user's rows:
+- **Owned rows are written only in their owner's name (A4).** Mixing a
+  bypass role with a non-bypass role in one `Roles` list disables the
+  bypass for that action (admins need their own `Roles("admin")` action to
+  change anyone's rows). For a table declared `-- owner: organizer_id` in
+  `schema.sql`, an action that a non-admin role may call limits every write
+  to the signed-in user's rows:
   `UPDATE events SET title = sqlc.arg(title) WHERE id = sqlc.arg(id) AND
   organizer_id = sqlc.arg(organizer_id)` with `OrganizerID: in.User`, and an
   INSERT sets `organizer_id` to `in.User`; never a request field, and a

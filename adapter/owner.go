@@ -93,13 +93,15 @@ func (w *walker) ownership(s ast.Stmt, q *SQLQuery) string {
 
 // ownedWrite is the sentence of a write limited to the caller's own rows.
 func (w *walker) ownedWrite(q *SQLQuery, rows, row, col string) string {
+	var s string
 	if q.Shape == "insert" {
-		return fmt.Sprintf(t("owned insert"), row, col)
+		s = fmt.Sprintf(t("owned insert"), row, col)
+	} else if q.Delete {
+		s = fmt.Sprintf(t("owned delete"), rows, col)
+	} else {
+		s = fmt.Sprintf(t("owned update"), rows, col)
 	}
-	if q.Delete {
-		return fmt.Sprintf(t("owned delete"), rows, col)
-	}
-	return fmt.Sprintf(t("owned update"), rows, col)
+	return s + w.mixedBypassNote() + "."
 }
 
 // ownerScope reports whether q limits its rows to the signed-in user's
@@ -157,17 +159,47 @@ func (w *walker) argValues() map[string]string {
 // bypassRoles is the action's Roles when every one of them bypasses
 // ownership (A4, BypassOwnership in cmd/server), or nil.
 func (w *walker) bypassRoles() []string {
-	if w.f.Public || len(w.f.Roles) == 0 || w.env.roles == nil {
+	bypass, limited := w.splitBypassRoles()
+	if len(bypass) == 0 || len(limited) > 0 {
 		return nil
 	}
-	names := make([]string, len(w.f.Roles))
-	for i, r := range w.f.Roles {
-		if !w.env.roles.passes[r] {
-			return nil
-		}
-		names[i] = "`" + r + "`"
+	return bypass
+}
+
+// splitBypassRoles splits the action's Roles into those that bypass
+// ownership and those that do not (quoted with backticks). Either side
+// may be empty.
+func (w *walker) splitBypassRoles() (bypass, limited []string) {
+	if w.f.Public || len(w.f.Roles) == 0 || w.env.roles == nil {
+		return nil, nil
 	}
-	return names
+	for _, r := range w.f.Roles {
+		q := "`" + r + "`"
+		if w.env.roles.passes[r] {
+			bypass = append(bypass, q)
+		} else {
+			limited = append(limited, q)
+		}
+	}
+	return bypass, limited
+}
+
+// mixedBypassNote is appended to an owner-scoped write when the action's
+// Roles mix a bypass role with a non-bypass one: the bypass is then
+// inactive for this action (A4), and the English says so.
+func (w *walker) mixedBypassNote() string {
+	bypass, limited := w.splitBypassRoles()
+	if len(bypass) == 0 || len(limited) == 0 {
+		return ""
+	}
+	bKey, lKey := "mixed bypass one", "mixed limited one"
+	if len(bypass) > 1 {
+		bKey = "mixed bypass n"
+	}
+	if len(limited) > 1 {
+		lKey = "mixed limited n"
+	}
+	return fmt.Sprintf(t("mixed note"), fmt.Sprintf(t(bKey), joinOr(bypass)), fmt.Sprintf(t(lKey), joinOr(limited)))
 }
 
 // userField is the Input field tagged server:"user" (T3), or nil.
