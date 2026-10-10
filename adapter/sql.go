@@ -30,19 +30,23 @@ type SQLQuery struct {
 	OnDelete []fkEffect
 	// Source is, for a Q8 insert from a parent row (INSERT INTO <Table> (...)
 	// SELECT ... FROM <Source> WHERE ...), the parent table; Conds are then
-	// that SELECT's WHERE conditions (on Source). A Q8 is a claim: it adds
-	// one row or none (:execrows, checked by S10).
+	// that SELECT's WHERE conditions (on Source). Without RETURNING a Q8 is a
+	// claim (:execrows, S10). With RETURNING it is Shape "insert" (:one; no
+	// row is sql.ErrNoRows, checked by S10).
 	Source string
 	Where  []sqlAssign // Q1, Q2, Q5: <col> = <value> (Q1, Q2: or <col> <op> <the current time>), joined by AND
 	Values []sqlAssign // Q3: column = value, in column order; Q6: SET column = value
 	Conds  []sqlCond   // Q6: WHERE conditions joined by AND (one may be an OR group)
-	Cols   []string    // Q2/Q5: selected columns; Q3: RETURNING columns
+	Cols   []string    // Q2/Q5: selected columns; Q3/Q8+:one: RETURNING columns
 	Params []string    // distinct parameter names, in order of appearance
 	// Q5 keyset page:
 	CursorCol     string // ORDER BY column; WHERE CursorCol < CursorVal
 	CursorVal     sqlVal
 	Limit         sqlVal // LIMIT value (param or int literal 1..page.MaxPageSize)
 	LimitN        int    // LIMIT literal, checked against page.MaxPageSize when rendered
+	JoinTable     string // Q5 with one INNER JOIN: the parent table
+	JoinFK        string // child column of ON child.fk = parent.pk
+	JoinPK        string // parent column of that equijoin (parent's PRIMARY KEY)
 	Reads, Writes []string
 	// Q7 IN list: <SliceCol> IN (sqlc.slice(<Slice>)), at most one per query.
 	Slice, SliceCol string
@@ -159,9 +163,13 @@ func parseSQLFile(path string, out map[string]*SQLQuery, errs *Refusals) error {
 					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation :one on a keyset page", Context: "Q0 query annotation",
 						Hint: "Q5 keyset pages use :many"})
 					cur.bad = true
-				case cur.Cmd != ":execrows" && cur.Source != "":
+				case cur.Source != "" && len(cur.Cols) > 0 && cur.Cmd != ":one":
+					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation " + cur.Cmd + " on an insert from a parent row with RETURNING", Context: "Q0 query annotation",
+						Hint: "A Q8 insert from a parent row with RETURNING answers with the stored row: annotate it :one; no row is sql.ErrNoRows (S10)"})
+					cur.bad = true
+				case cur.Source != "" && len(cur.Cols) == 0 && cur.Cmd != ":execrows":
 					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation " + cur.Cmd + " on an insert from a parent row", Context: "Q0 query annotation",
-						Hint: "A Q8 insert from a parent row adds one row or none: annotate it :execrows and check that number is exactly 1 (S10)"})
+						Hint: "A Q8 insert from a parent row without RETURNING adds one row or none: annotate it :execrows and check that number is exactly 1 (S10); with RETURNING use :one"})
 					cur.bad = true
 				case cur.Cmd != ":execrows" && cur.Delete:
 					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation " + cur.Cmd + " on a delete", Context: "Q0 query annotation",
@@ -173,7 +181,7 @@ func parseSQLFile(path string, out map[string]*SQLQuery, errs *Refusals) error {
 					cur.bad = true
 				case cur.Cmd == ":execrows" && cur.Shape != "claim":
 					*errs = append(*errs, Refusal{Pos: cur.pos, Construct: "query annotation :execrows on a non-claim shape", Context: "Q0 query annotation",
-						Hint: ":execrows is only for Q6 claim updates, Q8 inserts from a parent row and Q10 deletes"})
+						Hint: ":execrows is only for Q6 claim updates, Q8 inserts from a parent row without RETURNING, and Q10 deletes"})
 					cur.bad = true
 				}
 			}
@@ -323,13 +331,14 @@ var sqlConstructs = map[string]string{
 }
 
 type sqlParser struct {
-	q      *SQLQuery
-	toks   []sqlTok
-	i      int
-	errs   *Refusals
-	failed bool
-	uses   []paramUse // every parameter in statement order (Q7: the slice is last)
-	bare   []sqlTok   // column names written without their table (Q8, Q9 need it)
+	q          *SQLQuery
+	toks       []sqlTok
+	i          int
+	errs       *Refusals
+	failed     bool
+	uses       []paramUse  // every parameter in statement order (Q7: the slice is last)
+	bare       []sqlTok    // column names written without their table (Q8, Q9 need it)
+	selectQual []selectCol // SELECT list with optional table (Q5 JOIN)
 }
 
 // paramUse is one parameter in the statement text.
@@ -394,8 +403,6 @@ func (p *sqlParser) construct(t sqlTok) string {
 	switch {
 	case t.kind == "eof" || t.up == ";":
 		return "end of statement"
-	case t.up == "RETURNING" && p.q.Source != "":
-		return "RETURNING on an insert from a parent row"
 	case t.up == "RETURNING" && p.q.Delete:
 		return "RETURNING on a DELETE"
 	case t.up == "RETURNING" && p.q.Shape == "claim":
@@ -483,13 +490,10 @@ func (p *sqlParser) statement() {
 	default:
 		p.fail("SELECT, INSERT, UPDATE or DELETE")
 	}
-	if !p.failed && p.q.Source != "" && p.is("RETURNING") {
-		p.fail("end of query (a Q8 insert from a parent row adds one row or none: annotate :execrows, no RETURNING, and check the count with != 1, S10)")
-	}
 	if !p.failed && p.q.Delete && p.is("RETURNING") {
 		p.fail("end of query (a Q10 delete gives back only the number of rows it removed: annotate :execrows, no RETURNING, and check the count with != 1, S10)")
 	}
-	if !p.failed && p.q.Shape == "claim" && p.is("RETURNING") {
+	if !p.failed && p.q.Shape == "claim" && p.q.Source == "" && p.is("RETURNING") {
 		p.fail("end of query (a Q6 claim gives back only the number of rows it changed: annotate :execrows, no RETURNING)")
 	}
 	p.accept(";")
@@ -518,9 +522,31 @@ func (p *sqlParser) statement() {
 	for _, sub := range p.q.Subs {
 		subTables = appendUnique(subTables, sub.Table)
 	}
+	if p.q.JoinTable != "" && p.q.Shape != "page" {
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: p.q.pos, Construct: "JOIN in a non-page SELECT", Context: "query " + p.q.Name,
+			Hint: "A JOIN is only for a Q5 keyset page (WHERE … AND <cursor> < ? ORDER BY <cursor> DESC LIMIT n); " + allowedSQL})
+		return
+	}
+	if p.q.Shape == "page" {
+		p.checkPageSelect()
+		if p.failed {
+			return
+		}
+		if p.q.JoinTable != "" && len(p.bare) > 0 {
+			b := p.bare[0]
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: b.pos, Construct: "column " + b.text + " without its table in a keyset page that joins two tables", Context: "query " + p.q.Name,
+				Hint: "Write every column as " + p.q.Table + ".<col> or " + p.q.JoinTable + ".<col>; " + allowedSQL})
+			return
+		}
+	}
 	switch p.q.Shape {
 	case "count", "row", "page":
 		p.q.Reads = append([]string{p.q.Table}, subTables...)
+		if p.q.JoinTable != "" {
+			p.q.Reads = appendUnique(p.q.Reads, p.q.JoinTable)
+		}
 	case "claim":
 		// The WHERE reads the row in the same statement that writes it.
 		// A delete's cascades are added by checkDeletes (schema.sql).
@@ -533,6 +559,13 @@ func (p *sqlParser) statement() {
 		}
 	case "insert":
 		p.q.Writes = []string{p.q.Table}
+		if p.q.Source != "" { // Q8 with RETURNING: reads the parent, writes the child
+			p.q.Reads = []string{p.q.Source}
+			for _, t := range subTables {
+				p.q.Reads = appendUnique(p.q.Reads, t)
+			}
+			break
+		}
 		for _, v := range p.q.Values {
 			if v.Val.Kind == "next" {
 				p.q.Reads = []string{p.q.Table}
@@ -550,14 +583,28 @@ func (p *sqlParser) count() {
 }
 
 // Q2: SELECT <col>, ... FROM <table> WHERE <conds>
+// Q5 may qualify columns and add one INNER JOIN (see fromJoin).
 func (p *sqlParser) row() {
 	p.q.Shape = "row"
 	for {
-		col, ok := p.ident("a column name")
+		at := p.peek()
+		qual, ok := p.ident("a column name")
 		if !ok {
 			return
 		}
-		p.q.Cols = append(p.q.Cols, col)
+		col := qual
+		if p.accept(".") {
+			tbl := qual
+			if col, ok = p.ident("a column name after " + tbl + "."); !ok {
+				return
+			}
+			p.q.Cols = append(p.q.Cols, tbl+"."+col)
+			p.selectQual = append(p.selectQual, selectCol{table: tbl, col: col, at: at})
+		} else {
+			p.q.Cols = append(p.q.Cols, col)
+			p.bare = append(p.bare, at)
+			p.selectQual = append(p.selectQual, selectCol{col: col, at: at})
+		}
 		if !p.accept(",") {
 			break
 		}
@@ -567,12 +614,21 @@ func (p *sqlParser) row() {
 	}
 }
 
+type selectCol struct {
+	table, col string
+	at         sqlTok
+}
+
 func (p *sqlParser) from() {
 	table, ok := p.ident("a table name")
 	if !ok {
 		return
 	}
 	p.q.Table = table
+	p.fromJoin()
+	if p.failed {
+		return
+	}
 	if !p.need("WHERE", "WHERE after FROM "+table) {
 		return
 	}
@@ -584,7 +640,7 @@ func (p *sqlParser) from() {
 				Hint: readClockHint + "; " + allowedSQL})
 			return
 		}
-		col, ok := p.colRef(table, "a column name in WHERE")
+		col, ok := p.pageColRef("a column name in WHERE")
 		if !ok {
 			return
 		}
@@ -639,6 +695,73 @@ func (p *sqlParser) from() {
 	}
 }
 
+// fromJoin reads an optional single INNER JOIN for a Q5 page:
+// [INNER] JOIN <parent> ON <child>.<fk> = <parent>.<pk>.
+func (p *sqlParser) fromJoin() {
+	at := p.peek()
+	switch at.up {
+	case "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "OUTER":
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: at.up + " JOIN", Context: "query " + p.q.Name,
+			Hint: "A Q5 keyset page may use one INNER JOIN (JOIN or INNER JOIN) equijoining the child to the parent's primary key; OUTER/LEFT/RIGHT/CROSS joins are refused; " + allowedSQL})
+		return
+	case "INNER":
+		p.i++
+		if !p.need("JOIN", "JOIN after INNER") {
+			return
+		}
+	case "JOIN":
+		p.i++
+	default:
+		return
+	}
+	parent, ok := p.ident("the joined parent table")
+	if !ok {
+		return
+	}
+	if !p.need("ON", "ON after JOIN "+parent) {
+		return
+	}
+	// ON child.fk = parent.pk (either side order).
+	leftAt := p.peek()
+	leftTbl, ok := p.ident("a table name in the JOIN ON")
+	if !ok || !p.need(".", ".") {
+		return
+	}
+	leftCol, ok := p.ident("a column name after " + leftTbl + ".")
+	if !ok || !p.need("=", "= in the JOIN ON equijoin") {
+		return
+	}
+	rightAt := p.peek()
+	rightTbl, ok := p.ident("a table name in the JOIN ON")
+	if !ok || !p.need(".", ".") {
+		return
+	}
+	rightCol, ok := p.ident("a column name after " + rightTbl + ".")
+	if !ok {
+		return
+	}
+	child, parentTbl := p.q.Table, parent
+	var fk, pk string
+	switch {
+	case leftTbl == child && rightTbl == parentTbl:
+		fk, pk = leftCol, rightCol
+	case leftTbl == parentTbl && rightTbl == child:
+		fk, pk = rightCol, leftCol
+	default:
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: leftAt.pos, Construct: "JOIN ON " + leftTbl + "." + leftCol + " = " + rightTbl + "." + rightCol, Context: "query " + p.q.Name,
+			Hint: "The equijoin names the child and the joined parent: " + child + ".<fk> = " + parentTbl + ".<pk>; " + allowedSQL})
+		_ = rightAt
+		return
+	}
+	p.q.JoinTable, p.q.JoinFK, p.q.JoinPK = parentTbl, fk, pk
+	// A second JOIN is refused.
+	if p.is("JOIN") || p.is("INNER") || p.is("LEFT") || p.is("RIGHT") || p.is("FULL") || p.is("CROSS") || p.is("NATURAL") || p.is("OUTER") {
+		p.fail("WHERE after the one JOIN (a Q5 page has at most one INNER JOIN)")
+	}
+}
+
 // noComparisonInPage refuses a comparison with the current time in a Q5
 // keyset page: a page compares only its cursor.
 func (p *sqlParser) noComparisonInPage() {
@@ -663,7 +786,7 @@ func (p *sqlParser) finishPage() {
 		return
 	}
 	at := p.peek()
-	col, ok := p.colRef(p.q.Table, "the cursor column "+p.q.CursorCol)
+	col, ok := p.pageColRef("the cursor column " + p.q.CursorCol)
 	if !ok {
 		return
 	}
@@ -1003,11 +1126,68 @@ func (p *sqlParser) colRef(table, expected string) (string, bool) {
 	}
 	if col != table {
 		p.failed = true
+		hint := "Each SELECT names one table (no JOIN): write its columns as " + table + ".<col>; " + allowedSQL
+		if p.q.JoinTable != "" {
+			hint = "Write columns as " + p.q.Table + ".<col> or " + p.q.JoinTable + ".<col>; " + allowedSQL
+		}
 		*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "column of table " + col + " where only table " + table + " is in scope", Context: "query " + p.q.Name,
-			Hint: "Each SELECT names one table (no JOIN): write its columns as " + table + ".<col>; " + allowedSQL})
+			Hint: hint})
 		return "", false
 	}
 	return p.ident("a column name after " + table + ".")
+}
+
+// pageColRef is colRef for a Q5 WHERE/ORDER BY: the column must be of the
+// child table (cursor and filters stay on the child when a parent is joined).
+func (p *sqlParser) pageColRef(expected string) (string, bool) {
+	at := p.peek()
+	qual, ok := p.ident(expected)
+	if !ok {
+		return "", false
+	}
+	if !p.accept(".") {
+		p.bare = append(p.bare, at)
+		return qual, true
+	}
+	tbl, col := qual, ""
+	if col, ok = p.ident("a column name after " + tbl + "."); !ok {
+		return "", false
+	}
+	if tbl != p.q.Table {
+		p.failed = true
+		*p.errs = append(*p.errs, Refusal{Pos: at.pos, Construct: "column of table " + tbl + " in a keyset page WHERE or ORDER BY", Context: "query " + p.q.Name,
+			Hint: "The cursor, equality filters and ORDER BY are on the child table " + p.q.Table + " only; joined parent columns belong in the SELECT list; " + allowedSQL})
+		return "", false
+	}
+	return col, true
+}
+
+// checkPageSelect refuses a Q5 SELECT list that names a table other than the
+// child (and, with a JOIN, the joined parent), or leaves a column bare when
+// two tables are in scope.
+func (p *sqlParser) checkPageSelect() {
+	if p.failed {
+		return
+	}
+	join := p.q.JoinTable
+	for _, sc := range p.selectQual {
+		switch {
+		case sc.table == "":
+			if join != "" {
+				p.failed = true
+				*p.errs = append(*p.errs, Refusal{Pos: sc.at.pos, Construct: "column " + sc.col + " without its table in a keyset page that joins two tables", Context: "query " + p.q.Name,
+					Hint: "Write every selected column as " + p.q.Table + ".<col> or " + join + ".<col>; " + allowedSQL})
+				return
+			}
+		case sc.table == p.q.Table:
+		case join != "" && sc.table == join:
+		default:
+			p.failed = true
+			*p.errs = append(*p.errs, Refusal{Pos: sc.at.pos, Construct: "column of table " + sc.table + " in a keyset page SELECT", Context: "query " + p.q.Name,
+				Hint: "Selected columns are of " + p.q.Table + (map[bool]string{true: " or " + join, false: ""}[join != ""]) + "; " + allowedSQL})
+			return
+		}
+	}
 }
 
 // sub reads a Q9 proof subquery after <outer>.<col>: IN (SELECT
@@ -1166,6 +1346,22 @@ func (p *sqlParser) insertSelect(cols []string) {
 		p.q.Conds = append(p.q.Conds, c)
 		if !p.accept("AND") {
 			break
+		}
+	}
+	// Optional RETURNING: the stored child row (:one). Without it the query
+	// stays a claim (:execrows, S10 on the changed-row count).
+	if !p.accept("RETURNING") {
+		return
+	}
+	p.q.Shape = "insert"
+	for {
+		col, ok := p.ident("a column name after RETURNING")
+		if !ok {
+			return
+		}
+		p.q.Cols = append(p.q.Cols, col)
+		if !p.accept(",") {
+			return
 		}
 	}
 }
@@ -1365,6 +1561,31 @@ func tables(names []string) string {
 		return "table " + quoted[0]
 	}
 	return "tables " + joinList(quoted)
+}
+
+// checkPageJoins refuses a Q5 JOIN whose ON is not child.fk = parent.pk
+// against schema.sql's single-column PRIMARY KEY of the parent.
+func checkPageJoins(keys map[string]string, queries map[string]*SQLQuery) Refusals {
+	var errs Refusals
+	for _, name := range sortedKeys(queries) {
+		q := queries[name]
+		if q.bad || q.JoinTable == "" {
+			continue
+		}
+		pk := keys[q.JoinTable]
+		if pk == "" {
+			errs = append(errs, Refusal{Pos: q.pos, Construct: fmt.Sprintf("JOIN of table %s (query %s), which schema.sql does not give a single-column PRIMARY KEY", q.JoinTable, q.Name),
+				Context: "Q5 keyset page", Hint: "The equijoin is <child>.<fk> = <parent>.<pk> where <pk> is the parent's single-column PRIMARY KEY; " + allowedSQL})
+			q.bad = true
+			continue
+		}
+		if q.JoinPK != pk {
+			errs = append(errs, Refusal{Pos: q.pos, Construct: fmt.Sprintf("JOIN ON %s.%s = %s.%s (query %s), but %s's primary key is %s", q.Table, q.JoinFK, q.JoinTable, q.JoinPK, q.Name, q.JoinTable, pk),
+				Context: "Q5 keyset page", Hint: "Write JOIN " + q.JoinTable + " ON " + q.Table + ".<fk> = " + q.JoinTable + "." + pk + "; " + allowedSQL})
+			q.bad = true
+		}
+	}
+	return errs
 }
 
 // plural and singular turn a table name into words: line_items -> "line items" / "line item".

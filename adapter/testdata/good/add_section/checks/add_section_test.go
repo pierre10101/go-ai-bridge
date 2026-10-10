@@ -64,7 +64,7 @@ func sections(t *testing.T, conn *sql.DB) []string {
 func TestOwnerAddsSectionToOwnEvent(t *testing.T) {
 	a, conn := newAction(t)
 	out, err := add(a, add_section.Input{EventID: 1, Name: "Balcony", Capacity: 40, User: organizerA})
-	if err != nil || out != (add_section.Output{EventID: 1, Name: "Balcony"}) {
+	if err != nil || out.EventID != 1 || out.Name != "Balcony" || out.SectionID < 1 {
 		t.Fatalf("out %+v err %v", out, err)
 	}
 	if got := sections(t, conn); len(got) != 1 || got[0] != "1:Balcony:40" {

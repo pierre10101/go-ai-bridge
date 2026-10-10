@@ -11,13 +11,13 @@ or newer tag.
 # AGENTS.md: how to change this app
 
 This file is for any AI coding agent (and any person) working in this
-repository. It was written by `bridge-en init` (bridge-en 0.7.0).
+repository. It was written by `bridge-en init` (bridge-en 0.8.0).
 
 The features of this app are written in a narrow Go + sqlc grammar. The tool
 `bridge-en` translates each feature, deterministically and without AI, into
 English (`<slice>.en`) that a person reviews. Code outside the grammar is
 refused. The rules are in `RULEBOOK.md` of the pinned version
-(https://github.com/pierre10101/go-ai-bridge/blob/v0.7.0/RULEBOOK.md),
+(https://github.com/pierre10101/go-ai-bridge/blob/v0.8.0/RULEBOOK.md),
 and `bridge-en -grammar` prints them, one line per rule ID.
 
 ## 1. Install the pinned version
@@ -25,10 +25,10 @@ and `bridge-en -grammar` prints them, one line per rule ID.
 `go.mod` is the pin. Use the version it requires; never a different one.
 
 ```sh
-go get github.com/pierre10101/go-ai-bridge@v0.7.0          # once, in a new app
+go get github.com/pierre10101/go-ai-bridge@v0.8.0          # once, in a new app
 go list -m github.com/pierre10101/go-ai-bridge                    # the pinned version
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.7.0   # the same version
-bridge-en -version                                                # bridge-en 0.7.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.8.0   # the same version
+bridge-en -version                                                # bridge-en 0.8.0
 ```
 
 Import the runtime (`github.com/pierre10101/go-ai-bridge/runtime/...`). Never
@@ -114,10 +114,12 @@ bridge-en -write features/<slice>/     # save the English when -check only says 
 - **Child rows prove their parent is yours (A5).** For a table declared
   `-- owner: event_id -> events.organizer_id`, the statement that writes
   proves the parent row is the signed-in user's. An INSERT is an insert
-  from the parent row (Q8, `:execrows`, then `if n != 1 { return Output{},
-  F<n> }`): `INSERT INTO sections (event_id, name) SELECT events.id,
-  sqlc.arg(name) FROM events WHERE events.id = sqlc.arg(event_id) AND
-  events.organizer_id = sqlc.arg(organizer_id)`. An UPDATE adds the proof
+  from the parent row (Q8): without `RETURNING`, `:execrows` then
+  `if n != 1 { return Output{}, F<n> }`; with `RETURNING id`, `:one` and
+  `if err != nil { if errors.Is(err, sql.ErrNoRows) { return Output{}, F<n> };
+  return Output{}, err }`: `INSERT INTO sections (event_id, name) SELECT events.id,
+  sqlc.arg(name) FROM events WHERE events.id = sqlc.arg(event_id)
+  AND events.organizer_id = sqlc.arg(organizer_id)`. An UPDATE adds the proof
   subquery (Q9): `AND sections.event_id IN (SELECT events.id FROM events
   WHERE events.organizer_id = sqlc.arg(organizer_id))` and never sets
   `event_id`. Pass `OrganizerID: in.User`, and name every column with its

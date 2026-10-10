@@ -107,11 +107,11 @@ const intentNone = "# Intent: X\n\n## Failure cases\nNone.\n"
 // parents (prices -> sections -> events) is proved with nested subqueries.
 func TestInheritedEnglish(t *testing.T) {
 	for dir, want := range map[string]string{
-		addSectionFixture: "3. Claim: add one section to table `sections` with `event_id` = the event's `id`, `name` = the request's `name` and `capacity` = the request's `capacity`, only if there is an event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `AddSection` in queries/add_section.sql). " +
-			"The condition is checked by the same statement that writes, never by an earlier read: if there is no such event, no section is added. " +
+		addSectionFixture: "3. Write: add one section to table `sections` with `event_id` = the event's `id`, `name` = the request's `name` and `capacity` = the request's `capacity`, only if there is an event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `AddSection` in queries/add_section.sql). " +
+			"The condition is checked by the same statement that writes, never by an earlier read: if there is no such event, no section is added. Call the stored row the new section. " +
 			"Ownership: the new section is added only to an event you own (`events.organizer_id` is the signed-in user); for any other event nothing is written. If the query fails, stop with HTTP 500 Internal Server Error.\n" +
-			"4. If not exactly one section was added in step 3, stop with F3: HTTP 404 Not Found \"no such event of yours\".\n   Nothing was written in step 3, so there is nothing to roll back.\n",
-		renameSectionFixture: "on each section whose `id` is the request's `section_id` and `event_id` is the `id` of an event whose `organizer_id` is the signed-in user at that moment (query `RenameOwnSection` in queries/rename_section.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same section. " +
+			"4. If no section was added in step 3, stop with F3: HTTP 404 Not Found \"no such event of yours\".\n   Nothing was written in step 3, so there is nothing to roll back.\n",
+		renameSectionFixture: "on each section only if `id` is the request's `section_id` and `event_id` is the `id` of an event whose `organizer_id` is the signed-in user at that moment (query `RenameOwnSection` in queries/rename_section.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same section. " +
 			"Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) can be changed by this step. If the query fails",
 		adminSectionFixture: "Ownership: this step is not limited to sections of events you own (`events.organizer_id` need not be the signed-in user), because only role `admin` may call this action and cmd/server declares that it bypasses ownership. If the query fails",
 		myEventsFixture:     "2. Read: count the sections whose `event_id` is the `id` of an event whose `organizer_id` is the signed-in user (query `CountMySections` in queries/count_sections.sql). Ownership: only sections of events you own (`events.organizer_id` is the signed-in user) are read. If the query fails",
@@ -136,12 +136,12 @@ func TestInheritedEnglish(t *testing.T) {
 		{"add_price",
 			"-- name: AddPrice :execrows\nINSERT INTO prices (section_id, label, cents)\nSELECT sections.id, sqlc.arg(label), 100 FROM sections\nWHERE sections.id = sqlc.arg(section_id) AND sections.event_id IN (SELECT events.id FROM events WHERE events.organizer_id = sqlc.arg(organizer_id));\n",
 			"AddPrice(ctx, db.AddPriceParams{Label: in.Label, SectionID: in.SectionID, OrganizerID: in.User})",
-			"only if there is a section whose `id` is the request's `section_id` and `event_id` is the `id` of an event whose `organizer_id` is the signed-in user at that moment (query `AddPrice` in queries/q.sql). The condition is checked by the same statement that writes, never by an earlier read: if there is no such section, no price is added. " +
+			"Write: add one price to table `prices` with `section_id` = the section's `id`, `label` = the request's `label` and `cents` = 100, only if there is a section whose `id` is the request's `section_id` and `event_id` is the `id` of an event whose `organizer_id` is the signed-in user at that moment (query `AddPrice` in queries/q.sql). The condition is checked by the same statement that writes, never by an earlier read: if there is no such section, no price is added. " +
 				"Ownership: the new price is added only to a section of an event you own (`events.organizer_id` is the signed-in user); for any other section nothing is written.", false},
 		{"rename_price",
 			"-- name: RenamePrice :execrows\nUPDATE prices SET label = sqlc.arg(label)\nWHERE prices.id = sqlc.arg(section_id) AND " + proof + ";\n",
 			"RenamePrice(ctx, db.RenamePriceParams{Label: in.Label, SectionID: in.SectionID, OrganizerID: in.User})",
-			"on each price whose `id` is the request's `section_id` and `section_id` is the `id` of a section whose `event_id` is the `id` of an event whose `organizer_id` is the signed-in user at that moment (query `RenamePrice` in queries/q.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same price. " +
+			"on each price only if `id` is the request's `section_id` and `section_id` is the `id` of a section whose `event_id` is the `id` of an event whose `organizer_id` is the signed-in user at that moment (query `RenamePrice` in queries/q.sql). The condition is checked by the same statement that writes, never by an earlier read, so two calls cannot both change the same price. " +
 				"Ownership: only prices of sections of events you own (`events.organizer_id` is the signed-in user) can be changed by this step.", false},
 		{"count_prices",
 			"-- name: CountPrices :one\nSELECT COUNT(*) FROM prices WHERE prices.section_id = sqlc.arg(section_id) AND " + proof + ";\n",
@@ -216,36 +216,45 @@ func TestInheritedRefusals(t *testing.T) {
 		t.Fatalf("admin-only: %v", err)
 	}
 
-	// Q8, the insert from a parent row.
+	// Q8, the insert from a parent row (fixture uses RETURNING id / :one).
 	const add = "queries/add_section.sql"
 	const sel = "SELECT events.id, sqlc.arg(name), sqlc.arg(capacity)"
-	const where = "WHERE events.id = sqlc.arg(event_id) AND events.organizer_id = sqlc.arg(organizer_id);"
+	const where = "WHERE events.id = sqlc.arg(event_id) AND events.organizer_id = sqlc.arg(organizer_id)"
+	const noRows = "\t\tif errors.Is(err, sql.ErrNoRows) {\n\t\t\treturn Output{}, F3\n\t\t}\n"
 	q8 := map[string]struct {
 		edits []string
 		want  string
 	}{
-		"VALUES": {[]string{add, sel + "\nFROM events\n" + where, "VALUES (sqlc.arg(event_id), sqlc.arg(name), sqlc.arg(capacity)) RETURNING id;", add, ":execrows", ":one",
-			"action.go", "added, err := a.q.AddSection(ctx, db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID, OrganizerID: in.User})", "row, err := a.q.AddSection(ctx, db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID})",
-			"action.go", "\tif added != 1 {\n\t\treturn Output{}, F3\n\t}\n", "\tif row.ID == 0 {\n\t\treturn Output{}, F3\n\t}\n"},
-			"add_section/action.go:57:2: refused: insert into table sections (query AddSection), which inherits its owner from events, that does not prove the event is the signed-in user's is not in the allowed pattern list (A5 inherited ownership). Table sections inherits its owner from events through event_id (schema.sql:"},
+		"VALUES": {[]string{add, sel + "\nFROM events\n" + where + "\nRETURNING id;", "VALUES (sqlc.arg(event_id), sqlc.arg(name), sqlc.arg(capacity)) RETURNING id;",
+			"action.go", "db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID, OrganizerID: in.User}", "db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID}"},
+			"refused: insert into table sections (query AddSection), which inherits its owner from events, that does not prove the event is the signed-in user's is not in the allowed pattern list (A5 inherited ownership)"},
 		"parent column from the request": {[]string{add, sel, "SELECT sqlc.arg(event_id), sqlc.arg(name), sqlc.arg(capacity)"},
-			"add_section.sql:5:8: refused: value of the parent column event_id that is not events.id is not in the allowed pattern list (A5 inherited ownership)"},
-		"not named by its key": {[]string{add, where, "WHERE events.organizer_id = sqlc.arg(organizer_id) AND events.title = sqlc.arg(event_id);"},
+			"add_section.sql:6:8: refused: value of the parent column event_id that is not events.id is not in the allowed pattern list (A5 inherited ownership)"},
+		"not named by its key": {[]string{add, where, "WHERE events.organizer_id = sqlc.arg(organizer_id) AND events.title = sqlc.arg(event_id)"},
 			"refused: condition on events.title in an insert from a parent row is not in the allowed pattern list (A5 inherited ownership)"},
-		"no proof": {[]string{add, " AND events.organizer_id = sqlc.arg(organizer_id);", ";", "action.go", ", OrganizerID: in.User}", "}"},
+		"no proof": {[]string{add, " AND events.organizer_id = sqlc.arg(organizer_id)", "", "action.go", ", OrganizerID: in.User}", "}"},
 			"refused: insert from a row of events whose WHERE does not name it by events.id = <parameter> and prove it is the signed-in user's is not in the allowed pattern list (A5 inherited ownership)"},
-		"RETURNING": {[]string{add, where, strings.TrimSuffix(where, ";") + " RETURNING id;"},
-			"refused: RETURNING on an insert from a parent row is not in the allowed pattern list (query AddSection). Expected end of query (a Q8 insert from a parent row adds one row or none: annotate :execrows, no RETURNING, and check the count with != 1, S10)"},
-		"as :one": {[]string{add, ":execrows", ":one"},
-			"refused: query annotation :one on an insert from a parent row is not in the allowed pattern list (Q0 query annotation)"},
-		"unchecked": {[]string{"action.go", "\tif added != 1 {\n\t\treturn Output{}, F3\n\t}\n", ""},
-			"refused: claim whose changed-row count no guard checks is not in the allowed pattern list (S10 claim check)"},
+		"as :execrows with RETURNING": {[]string{add, ":one", ":execrows"},
+			"refused: query annotation :execrows on an insert from a parent row with RETURNING is not in the allowed pattern list (Q0 query annotation)"},
+		"as :one without RETURNING": {[]string{add, "\nRETURNING id;", ";", add, ":one", ":execrows",
+			"action.go", "sectionID, err := a.q.AddSection(ctx, db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID, OrganizerID: in.User})\n\tif err != nil {\n" + noRows + "\t\treturn Output{}, err\n\t}\n",
+			"added, err := a.q.AddSection(ctx, db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID, OrganizerID: in.User})\n\tif err != nil {\n\t\treturn Output{}, err\n\t}\n\tif added != 1 {\n\t\treturn Output{}, F3\n\t}\n",
+			"action.go", "out := Output{SectionID: sectionID, EventID: in.EventID, Name: in.Name}", "out := Output{EventID: in.EventID, Name: in.Name}"},
+			""}, // accepted: :execrows without RETURNING
+		"unchecked": {[]string{"action.go", noRows, ""},
+			"refused: insert from a parent row with RETURNING whose sql.ErrNoRows is not mapped to a failure is not in the allowed pattern list (S10 claim check)"},
 		"into an owned table": {[]string{add, "INSERT INTO sections (event_id, name, capacity)", "INSERT INTO events (event_id, name, capacity)"},
 			"add_section.sql:1:1: refused: insert from a row of events into table events, which does not inherit its owner is not in the allowed pattern list (A5 inherited ownership)"},
 	}
 	for name, tc := range q8 {
 		t.Run("Q8/"+name, func(t *testing.T) {
 			_, err := Render(inFixtureApp(t, addSectionFixture, "add_section", tc.edits...))
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("accepted path refused: %v", err)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("want %q in:\n%v", tc.want, err)
 			}

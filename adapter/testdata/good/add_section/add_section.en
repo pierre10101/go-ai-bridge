@@ -18,7 +18,8 @@ The action also takes this value, which the caller does not send:
 - `user`: set by the server: the signed-in user (from the app's sign-in session); the caller does not send it, and a request that does is answered with HTTP 400 below.
 
 Every answer is JSON. An error answer is `{"error": {"id": <id>, "message": <message>}}`.
-- HTTP 201 Created on success, with an object of these 2 fields:
+- HTTP 201 Created on success, with an object of these 3 fields:
+  - `section_id`: a whole number.
   - `event_id`: a whole number.
   - `name`: text.
 - HTTP 400 Bad Request, id "bad_request", with a message describing the problem, if the body is not exactly one JSON object, leaves out a field listed above or sets one to null, has a field not listed above (names are case-sensitive), has a value of the wrong type, or is larger than 1 MiB; or the request sends a value that the server sets, in the body or in the query string. The action does not run.
@@ -42,10 +43,11 @@ Steps 3 to 6 run in one database transaction. It begins with the query in step 3
 
 1. If the request's `name` equals the text "", stop with F1: HTTP 422 Unprocessable Entity "name is required".
 2. If the request's `capacity` is less than 1, stop with F2: HTTP 422 Unprocessable Entity "capacity must be at least 1".
-3. Claim: add one section to table `sections` with `event_id` = the event's `id`, `name` = the request's `name` and `capacity` = the request's `capacity`, only if there is an event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `AddSection` in queries/add_section.sql). The condition is checked by the same statement that writes, never by an earlier read: if there is no such event, no section is added. Ownership: the new section is added only to an event you own (`events.organizer_id` is the signed-in user); for any other event nothing is written. If the query fails, stop with HTTP 500 Internal Server Error.
-4. If not exactly one section was added in step 3, stop with F3: HTTP 404 Not Found "no such event of yours".
+3. Write: add one section to table `sections` with `event_id` = the event's `id`, `name` = the request's `name` and `capacity` = the request's `capacity`, only if there is an event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `AddSection` in queries/add_section.sql). The condition is checked by the same statement that writes, never by an earlier read: if there is no such event, no section is added. Call the stored row the new section. Ownership: the new section is added only to an event you own (`events.organizer_id` is the signed-in user); for any other event nothing is written. If the query fails, stop with HTTP 500 Internal Server Error.
+4. If no section was added in step 3, stop with F3: HTTP 404 Not Found "no such event of yours".
    Nothing was written in step 3, so there is nothing to roll back.
 5. Build the answer:
+   - `section_id` = the new section
    - `event_id` = the request's `event_id`
    - `name` = the request's `name`
 6. Check that:

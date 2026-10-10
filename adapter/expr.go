@@ -241,8 +241,12 @@ func (w *walker) value(e ast.Expr) string {
 		switch e.Op {
 		case token.LAND, token.LOR, token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
 			return w.cond(e)
+		case token.ADD, token.SUB:
+			if clock, ok := w.clockOffset(e); ok {
+				return clock
+			}
 		}
-		w.refuse(e, "arithmetic operator "+e.Op.String(), ctx, "Do arithmetic in internal/domain and call it (E5)")
+		w.refuse(e, "arithmetic operator "+e.Op.String(), ctx, "E5: only in.Now + <seconds> or in.Now - <seconds> (a whole-number literal); other arithmetic belongs in SQL (Q6) or is refused")
 	case *ast.UnaryExpr:
 		switch {
 		case e.Op == token.NOT:
@@ -286,6 +290,28 @@ func readsClock(fun ast.Expr) bool {
 func isIntLit(e ast.Expr) bool {
 	lit, ok := e.(*ast.BasicLit)
 	return ok && lit.Kind == token.INT
+}
+
+// clockOffset renders in.Now + <seconds> / in.Now - <seconds> (E5): the
+// same distance words as a Q6 SET of the current time plus an offset.
+func (w *walker) clockOffset(e *ast.BinaryExpr) (string, bool) {
+	if e.Op != token.ADD && e.Op != token.SUB {
+		return "", false
+	}
+	if !w.isClockInput(e.X) || !isIntLit(e.Y) {
+		return "", false
+	}
+	n, err := strconv.Atoi(e.Y.(*ast.BasicLit).Value)
+	if err != nil || n < 1 {
+		w.refuse(e.Y, "clock offset "+types.ExprString(e.Y), "E5 domain call",
+			"in.Now + <seconds> / in.Now - <seconds> takes a positive whole-number literal (seconds)")
+		return "?", true
+	}
+	op := "+"
+	if e.Op == token.SUB {
+		op = "-"
+	}
+	return fmt.Sprintf(t("time "+op), clockAmount(n), t("clock")), true
 }
 
 // localName is how the English refers to a local: never by its Go name,

@@ -163,7 +163,7 @@ func TestMultiRowClaimWording(t *testing.T) {
 	for _, want := range []string{
 		"- `ticket_ids`: a list of 1 to 20 whole numbers with no duplicates.\n",
 		"; or a list has fewer or more entries than allowed above, has the same entry twice, or has an entry that is null; or the request sends a value that the server sets",
-		"on each ticket whose `held_by` is the session from the cookie and `expires_at` is later than the current time and `id` is one of the request's `ticket_ids` at that moment",
+		"on each ticket only if `held_by` is the session from the cookie and `expires_at` is later than the current time and `id` is one of the request's `ticket_ids` at that moment",
 		"3. Read: count the tickets whose `held_by` is the session from the cookie and `expires_at` is no later than the current time and `id` is one of the request's `ticket_ids` (query `CountStillHeld` in queries/tickets_after.sql). If the query fails, stop with HTTP 500 Internal Server Error.\n   Any change made in step 2 is rolled back.\n",
 		"5. If the number of tickets changed in step 2 is not the number of tickets in the request's `ticket_ids`, stop with F3: HTTP 409 Conflict \"a ticket is not held by this session\".\n   Any change made in step 2 is rolled back.\n",
 		// after the S11 check: one row per entry changed, so a write happened

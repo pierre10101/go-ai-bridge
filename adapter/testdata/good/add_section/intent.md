@@ -19,6 +19,7 @@ The signed-in user is set by the server; a request that sends `user` is a
 bad request (HTTP 400).
 
 ## Outputs
+- `section_id` — the new section's id.
 - `event_id` — the event the section was added to.
 - `name` — the new section's name.
 

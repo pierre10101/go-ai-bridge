@@ -50,11 +50,11 @@ parts an app uses:
 
 ```sh
 # 1. In the app: depend on one version. go.mod is the pin.
-go get github.com/pierre10101/go-ai-bridge@v0.7.0
+go get github.com/pierre10101/go-ai-bridge@v0.8.0
 
 # 2. Install the binary of the same version.
-go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.7.0
-bridge-en -version                      # bridge-en 0.7.0
+go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.8.0
+bridge-en -version                      # bridge-en 0.8.0
 ```
 
 Then `bridge-en init` writes `AGENTS.md` and pointer files for AI agents
@@ -64,7 +64,7 @@ into the app (documents only; see
 The app's `go.mod` then says:
 
 ```
-require github.com/pierre10101/go-ai-bridge v0.7.0
+require github.com/pierre10101/go-ai-bridge v0.8.0
 ```
 
 In the app's CI, the `setup-bridge-en` action installs the binary of the
@@ -75,9 +75,9 @@ the `version` you pass it:
 - uses: actions/setup-go@v5
   with:
     go-version: "1.24.x"
-- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0   # version from go.mod
+- uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.8.0   # version from go.mod
 # or download the released binary and check its SHA256 instead of building it:
-# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0
+# - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.8.0
 #   with: { method: release }
 - run: bridge-en -check features/*/
 ```
@@ -98,12 +98,15 @@ and the app runs that same runtime: both come from the one module version in
 another version than the binary, or none:
 
 ```
-go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.7.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.7.0), then review every .en diff
+go.mod: pins github.com/pierre10101/go-ai-bridge v0.0.9 but this is bridge-en v0.8.0; install the pinned version (go install github.com/pierre10101/go-ai-bridge/cmd/bridge-en@v0.0.9) or move the app (go get github.com/pierre10101/go-ai-bridge@v0.8.0), then review every .en diff
 ```
 
 To move an app to a new version: `go get github.com/pierre10101/go-ai-bridge@v<new>`,
 install the same binary, run `bridge-en -write` on every slice, review the
-diff of every `.en` file, commit. 0.7.0 lets a Q5 page omit equality
+diff of every `.en` file, commit. 0.8.0 adds E5 clock arithmetic in the
+answer, Q8 with RETURNING, Q5 pages with one INNER JOIN, an S10 refusal when
+a Q8 guard is unreachable after a prior Q6 claim, and "Update:" English for
+Q6; see README.md, "0.7.x to 0.8.0". 0.7.0 lets a Q5 page omit equality
 filters, fills `path:"..."` on every method (never from the body), refuses
 non-ASCII in SQL files, and accepts an optional `// bridge-en-plural:`;
 see README.md, "0.6.x to 0.7.0". 0.6.0 adds DELETE (Q10): a delete names
@@ -595,7 +598,7 @@ says, for each earlier write:
 | a claim whose count is not known yet: a read right after it, or the `!= 1` (or S11) guard itself (0 rows, or several) | `Any change made in step 2 is rolled back.` |
 | a guard whose condition includes `<n> == 0` (`claimed == 0 && ...`): it stops only when the claim changed nothing | `Nothing was written in step 2, so there is nothing to roll back.` |
 | the `!= 1` guard of a Q10 delete by `<key> = <value>`: it removes one row or none (`delete_section.en`: ``2. If not exactly one section was deleted in step 1, stop with F1: ...``) | `Nothing was written in step 1, so there is nothing to roll back.` |
-| the `!= 1` guard of a Q8 insert from a parent row: it names its parent by the parent's key, so it adds one row or none (`add_section.en`: ``4. If not exactly one section was added in step 3, stop with F3: ...``) | `Nothing was written in step 3, so there is nothing to roll back.` |
+| the S10 guard of a Q8 insert from a parent row: it names its parent by the parent's key, so it adds one row or none (`add_section.en` with RETURNING: ``4. If no section was added in step 3, stop with F3: ...``; without RETURNING: ``If not exactly one section was added in step 3, ...``) | `Nothing was written in step 3, so there is nothing to roll back.` |
 
 The failure index says the same per F-ID: `before any write`, `after a write
 that changed nothing, so nothing was written`, `after a write that may have
@@ -816,7 +819,7 @@ state vs not yours), use a Q1 `SELECT COUNT(*)` first; only call Q2 after a
 count has proved the row exists. Putting a Q2 before a guard that branches
 on "not found" will 500 in tests the first time the row is missing.
 
-Refused: `SELECT * ...` - `refused: SELECT * is not in the allowed pattern list`; `... JOIN ...` - `refused: JOIN is not in the allowed pattern list`; `expires_at > sqlc.arg(now) - 600` with `Now: in.Cutoff` (`adapter/testdata/bad/read_clock_source`) - `refused: comparison expires_at > sqlc.arg(now) - 600 in query FindLiveHold, whose value in.Cutoff is not the server-set current time is not in the allowed pattern list (Q2 one row). ...`
+Refused: `SELECT * ...` - `refused: SELECT * is not in the allowed pattern list`; a JOIN outside a Q5 keyset page - `refused: JOIN in a non-page SELECT`; `expires_at > sqlc.arg(now) - 600` with `Now: in.Cutoff` (`adapter/testdata/bad/read_clock_source`) - `refused: comparison expires_at > sqlc.arg(now) - 600 in query FindLiveHold, whose value in.Cutoff is not the server-set current time is not in the allowed pattern list (Q2 one row). ...`
 
 ### Q3
 
@@ -835,18 +838,22 @@ Refused: `WHERE id = (SELECT 1)` - `refused: subquery is not in the allowed patt
 
 ### Q5
 
-**keyset page** - `SELECT <col>, ... FROM <table> WHERE [<col> = <value> AND ...] <cursor> < <value> ORDER BY <cursor> DESC LIMIT <n>`;
+**keyset page** - `SELECT <col>, ... FROM <child> [JOIN <parent> ON <child>.<fk> = <parent>.<pk>] WHERE [<col> = <value> AND ...] <cursor> < <value> ORDER BY <cursor> DESC LIMIT <n>`;
 equality filters before the cursor are optional (a whole-table / public
-catalog page is only the cursor). `:many` only, GET slices only, no OFFSET;
-the action guards its limit with `page.IsPageLimit`
-(`runtime/page`, with `page.MaxPageSize` 100 and `page.DefaultPageSize` 20).
-Omit `after` for the newest page (Bind fills `page.StartCursor`). Do not
-send `after=0`: that value means "no next page" in `next_after`, and the
-fixture refuses it with F3 so a client that follows `next_after` stops.
+catalog page is only the cursor). Optional one `INNER JOIN` (`JOIN` or
+`INNER JOIN` only): equijoin the child to the parent's single-column
+`PRIMARY KEY`; selected columns may include `<parent>.<col>`; cursor,
+equality filters, `ORDER BY` and `LIMIT` stay on the child. `:many` only,
+GET slices only, no OFFSET; the action guards its limit with
+`page.IsPageLimit` (`runtime/page`, with `page.MaxPageSize` 100 and
+`page.DefaultPageSize` 20). Omit `after` for the newest page (Bind fills
+`page.StartCursor`). Do not send `after=0`: that value means "no next page"
+in `next_after`, and the fixture refuses it with F3 so a client that
+follows `next_after` stops.
 
-English: `5. Read: list the invoices whose `customer_id` is the request's `customer_id` and whose `seq` is less than the request's `after`, highest `seq` first, at most the request's `limit` of them (...). Call them the listed invoices; there may be none.` / bare: `Read: list the books whose `id` is less than the request's `after`, highest `id` first, ...`
+English: `5. Read: list the invoices whose `customer_id` is the request's `customer_id` and whose `seq` is less than the request's `after`, highest `seq` first, at most the request's `limit` of them (...). Call them the listed invoices; there may be none.` / bare: `Read: list the books whose `id` is less than the request's `after`, highest `id` first, ...` / with JOIN (`list_event_sections.en`): `Read: list the sections with an event's `title` whose `event_id` is ...`
 
-Refused: `... LIMIT ? OFFSET ?` - `refused: OFFSET ...`; a write query in a GET - `refused: write query AddInvoice in a GET action`; a comparison with the current time in a page (`adapter/testdata/bad/read_clock_position`) - `refused: comparison expires_at <= sqlc.arg(now) in a keyset page is not in the allowed pattern list (query PageEnded). A Q5 keyset page compares only its cursor (<cursor> < <value>); every other condition is <col> = <value>. A comparison with the current time belongs in a Q1 count, a Q2 one-row read or a Q6 claim`
+Refused: `... LIMIT ? OFFSET ?` - `refused: OFFSET ...`; a write query in a GET - `refused: write query AddInvoice in a GET action`; a comparison with the current time in a page (`adapter/testdata/bad/read_clock_position`) - `refused: comparison expires_at <= sqlc.arg(now) in a keyset page is not in the allowed pattern list (query PageEnded). A Q5 keyset page compares only its cursor (<cursor> < <value>); every other condition is <col> = <value>. A comparison with the current time belongs in a Q1 count, a Q2 one-row read or a Q6 claim`; `LEFT JOIN` - `refused: LEFT JOIN`; a JOIN outside a keyset page - `refused: JOIN in a non-page SELECT`
 
 ### Q6
 
@@ -957,26 +964,29 @@ Refused (`adapter/testdata/bad/list_shapes`):
 
 **insert from a parent row** - the only INSERT into a child table (A5) that
 proves its parent is the signed-in user's, from an action a role without
-the ownership bypass may call:
+the ownership bypass may call. Without `RETURNING` it is `:execrows` and
+S10 is `if n != 1`. With `RETURNING` it is `:one` and S10 maps
+`sql.ErrNoRows`:
 
 ```sql
--- name: AddSection :execrows
+-- name: AddSection :one
 INSERT INTO sections (event_id, name, capacity)
 SELECT events.id, sqlc.arg(name), sqlc.arg(capacity)
 FROM events
-WHERE events.id = sqlc.arg(event_id) AND events.organizer_id = sqlc.arg(organizer_id);
+WHERE events.id = sqlc.arg(event_id) AND events.organizer_id = sqlc.arg(organizer_id)
+RETURNING id;
 ```
 ```go
-added, err := a.q.AddSection(ctx, db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID, OrganizerID: in.User})
+row, err := a.q.AddSection(ctx, db.AddSectionParams{Name: in.Name, Capacity: in.Capacity, EventID: in.EventID, OrganizerID: in.User})
 if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
+		return Output{}, F3 // 404 "no such event of yours"
+	}
 	return Output{}, err
-}
-if added != 1 {
-	return Output{}, F3 // 404 "no such event of yours"
 }
 ```
 
-- `INSERT INTO <child> (<fk>, <col>, ...) SELECT <parent>.<key>, <value>, ... FROM <parent> WHERE <parent>.<key> = <value> AND <proof>`;
+- `INSERT INTO <child> (<fk>, <col>, ...) SELECT <parent>.<key>, <value>, ... FROM <parent> WHERE <parent>.<key> = <value> AND <proof> [RETURNING <col>, ...]`;
 - the first column is the child's parent column `<fk>` and its value
   `<parent>.<key>`, the parent's single-column `PRIMARY KEY`; the other
   values are Q4 values (parameters or literals), never a column of the parent
@@ -986,23 +996,25 @@ if added != 1 {
   its rows directly, or the parent's own Q9 subquery when it is a child too;
 - every column has its table (`events.id`; sqlc reports an unqualified one as
   ambiguous); the `INSERT` column list stays plain;
-- `:execrows`, no `RETURNING`; it adds one row or none, so the S10 guard
-  `if added != 1` is the failure "no such parent of yours": there is no
-  earlier read (W1), and nothing is written.
+- without `RETURNING`: `:execrows`, S10 `if added != 1`; with `RETURNING`:
+  `:one`, each returned column is in the INSERT list or the child's
+  single-column `PRIMARY KEY` (typically `id`), and S10 is the nested
+  `errors.Is(err, sql.ErrNoRows)` form above (imports `database/sql` and
+  `errors`, D2).
 
 English (`adapter/testdata/good/add_section/add_section.en`):
 ```
-3. Claim: add one section to table `sections` with `event_id` = the event's `id`, `name` = the request's `name` and `capacity` = the request's `capacity`, only if there is an event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `AddSection` in queries/add_section.sql). The condition is checked by the same statement that writes, never by an earlier read: if there is no such event, no section is added. Ownership: the new section is added only to an event you own (`events.organizer_id` is the signed-in user); for any other event nothing is written. If the query fails, stop with HTTP 500 Internal Server Error.
-4. If not exactly one section was added in step 3, stop with F3: HTTP 404 Not Found "no such event of yours".
+3. Write: add one section to table `sections` with `event_id` = the event's `id`, `name` = the request's `name` and `capacity` = the request's `capacity`, only if there is an event whose `id` is the request's `event_id` and `organizer_id` is the signed-in user at that moment (query `AddSection` in queries/add_section.sql). The condition is checked by the same statement that writes, never by an earlier read: if there is no such event, no section is added. Call the stored row the new section. Ownership: the new section is added only to an event you own (`events.organizer_id` is the signed-in user); for any other event nothing is written. If the query fails, stop with HTTP 500 Internal Server Error.
+4. If no section was added in step 3, stop with F3: HTTP 404 Not Found "no such event of yours".
    Nothing was written in step 3, so there is nothing to roll back.
 ```
 
 Refused:
 - `SELECT events.id, events.organizer_id, sqlc.arg(name)` (`adapter/testdata/bad/child_copied_owner`) -
   `queries/add_section.sql:16:19: refused: copy of events.organizer_id into organizer_id is not in the allowed pattern list (A5 inherited ownership). Only the parent column takes a column of the parent (its key); every other value is a parameter or a literal: ...`
-- `... RETURNING id` - `refused: RETURNING on an insert from a parent row ...`; `:one` - `refused: query annotation :one on an insert from a parent row ...`
+- `:execrows` with `RETURNING` - `refused: query annotation :execrows on an insert from a parent row with RETURNING ...`; `:one` without `RETURNING` - `refused: query annotation :one on an insert from a parent row ...`
 - an unqualified column next to a subquery or in an insert from a parent row - `refused: column id without its table in a query that reads two tables ...`
-- other forms (`TestInheritedRefusals`): the key without the proof (`WHERE events.id = sqlc.arg(event_id)`) - `refused: insert from a row of events whose WHERE does not name it by events.id = <parameter> and prove it is the signed-in user's ...`; any other condition on the parent - `refused: condition on events.title in an insert from a parent row ...`; `SELECT sqlc.arg(event_id), ...` - `add_section.sql:5:8: refused: value of the parent column event_id that is not events.id ...`
+- other forms (`TestInheritedRefusals`): the key without the proof (`WHERE events.id = sqlc.arg(event_id)`) - `refused: insert from a row of events whose WHERE does not name it by events.id = <parameter> and prove it is the signed-in user's ...`; any other condition on the parent - `refused: condition on events.title in an insert from a parent row ...`; `SELECT sqlc.arg(event_id), ...` - `refused: value of the parent column event_id that is not events.id ...`
 - into a table without an inherited owner - `refused: insert from a row of events into table events, which does not inherit its owner ...`
 
 ### Q9
@@ -1519,6 +1531,17 @@ signed-in user's rows"). Put administrators on their own action
 - a `Public` action never writes or deletes an owned table (signed out,
   its user is 0 or the empty text, which owns nothing).
 
+**A4 vs A5 for cross-owner children.** A5 is for rows that inherit ownership
+from a parent (`-- owner: event_id -> events.organizer_id`): the write must
+prove the parent is yours (Q8 / Q9). A4 is for a table that has its **own**
+owner column (`-- owner: reviewer_id`). A review of a book the caller does
+not own is still A4: declare `-- owner: reviewer_id`, insert with Q3
+(`INSERT ... VALUES ... RETURNING ...`) setting `reviewer_id` to `in.User`,
+and optionally take `book_id` as a request field (a foreign key, not an
+owner proof). There is no Q11 "insert proving the parent exists without
+ownership": existence of the other table is a failure of the insert (schema
+FK) or a separate concern outside this grammar.
+
 An action whose `Roles` lists **only** roles with the bypass (here
 `httpx.Roles("admin")`) may write any row.
 
@@ -1908,8 +1931,8 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
         with: { go-version: "1.24.x" }
-      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.7.0
-      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.7.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/setup-bridge-en@v0.8.0
+      - uses: pierre10101/go-ai-bridge/.github/actions/pr-english@v0.8.0
         # with:
         #   features: "features/*/"   # default
         #   max-chars: "60000"        # default

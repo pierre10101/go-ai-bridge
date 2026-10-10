@@ -16,8 +16,10 @@ import (
 //
 //   - Q8, an insert from the parent row: INSERT INTO <child> (<col>, ...)
 //     SELECT <parent>.<key>, <value>, ... FROM <parent> WHERE <parent>.<key>
-//     = <value> AND <proof of parent>. It adds one row or none (:execrows,
-//     S10), so another user's parent adds nothing.
+//     = <value> AND <proof of parent> [RETURNING <col>, ...]. Without
+//     RETURNING it adds one row or none (:execrows, S10); with RETURNING it
+//     is :one and no row is sql.ErrNoRows (S10). Another user's parent adds
+//     nothing either way.
 //   - Q9, a proof subquery, as an AND condition of a Q6 claim's WHERE:
 //     <child>.<col> IN (SELECT <parent>.<key> FROM <parent> WHERE <proof of
 //     parent>).
@@ -32,7 +34,7 @@ import (
 // the table, key, columns and conditions the annotations name. Whether the
 // value compared with the owner column is the signed-in user is checked
 // where the query is called (childOwnership).
-func checkProofs(owners map[string]*owner, queries map[string]*SQLQuery) Refusals {
+func checkProofs(owners map[string]*owner, queries map[string]*SQLQuery, keys map[string]string) Refusals {
 	var errs Refusals
 	for _, name := range sortedKeys(queries) {
 		q := queries[name]
@@ -98,6 +100,26 @@ func checkProofs(owners map[string]*owner, queries map[string]*SQLQuery) Refusal
 		if !q.bad && (!key || !proof) {
 			refuse(at, fmt.Sprintf("insert from a row of %s whose WHERE does not name it by %s.%s = <parameter> and prove it is the signed-in user's", q.Source, q.Source, o.ParentKey), "Write it as "+q8SQL(o))
 		}
+		if q.bad || len(q.Cols) == 0 {
+			continue
+		}
+		// RETURNING columns: each is in the INSERT column list, or the
+		// child's single-column PRIMARY KEY (typically id).
+		inserted := map[string]bool{}
+		for _, v := range q.Values {
+			inserted[v.Col] = true
+		}
+		pk := keys[q.Table]
+		for _, c := range q.Cols {
+			if inserted[c] || c == pk {
+				continue
+			}
+			hint := "RETURNING columns are a subset of the INSERT column list"
+			if pk != "" {
+				hint += ", or the child's primary key " + pk
+			}
+			refuse(at, fmt.Sprintf("RETURNING column %s that is not in the INSERT column list of table %s", c, q.Table), hint+": "+q8SQL(o))
+		}
 	}
 	return errs
 }
@@ -155,7 +177,8 @@ func proofSQL(o *owner) string {
 func q8SQL(o *owner) string {
 	p := o.Parent
 	return "INSERT INTO " + o.Table + " (" + o.Col + ", <col>, ...) SELECT " + p.Table + "." + o.ParentKey + ", <value>, ... FROM " + p.Table +
-		" WHERE " + p.Table + "." + o.ParentKey + " = sqlc.arg(" + o.Col + ") AND " + proofSQL(p) + " (:execrows, then if <n> != 1 { return Output{}, F<n> }, S10)"
+		" WHERE " + p.Table + "." + o.ParentKey + " = sqlc.arg(" + o.Col + ") AND " + proofSQL(p) +
+		" (:execrows and if <n> != 1, or RETURNING <col> with :one and if errors.Is(err, sql.ErrNoRows), S10)"
 }
 
 // chainRows is the plural phrase of o's rows through the chain: "sections
